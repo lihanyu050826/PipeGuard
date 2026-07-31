@@ -2,8 +2,8 @@
 
 > 工业互联网概论课程小组项目：利用多源传感、边缘计算与云端可视化，实现油气管道运行状态监测、泄漏风险研判和告警处置闭环。
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.1.0-2563eb)](CHANGELOG.md)
+[![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-1.1.1-2563eb)](CHANGELOG.md)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-0b8b80)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
@@ -33,7 +33,7 @@
 
 ## 快速开始
 
-环境要求：Python 3.10 或更高版本。
+环境要求：Python 3.6 或更高版本。
 
 ```bash
 git clone https://github.com/lihanyu050826/PipeGuard.git
@@ -139,7 +139,7 @@ PipeGuard/
 python -m unittest discover -s tests -v
 ```
 
-当前共 14 项自动化测试，覆盖正常、警告、严重风险识别，相关信号增强、接口健康检查、管线查询、404 处理、泄漏注入、告警确认、工单状态机、运营统计和 CSV 导出。
+当前共 16 项自动化测试，覆盖正常、警告、严重风险识别，相关信号增强、接口健康检查、管线查询、404 处理、泄漏注入、告警确认、工单状态机、运营统计、CSV 导出和 Python 3.6 兼容性。
 
 ## 文档
 

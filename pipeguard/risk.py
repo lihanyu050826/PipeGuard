@@ -1,22 +1,35 @@
 """Explainable multi-sensor leak risk assessment."""
 
-from __future__ import annotations
-
-from dataclasses import asdict, dataclass
+from typing import Dict, List
 
 
-@dataclass(frozen=True)
 class RiskResult:
     """Result produced by the fusion algorithm."""
 
-    score: float
-    level: str
-    confidence: float
-    factors: list[str]
-    components: dict[str, float]
+    __slots__ = ("score", "level", "confidence", "factors", "components")
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def __init__(
+        self,
+        score: float,
+        level: str,
+        confidence: float,
+        factors: List[str],
+        components: Dict[str, float],
+    ) -> None:
+        self.score = score
+        self.level = level
+        self.confidence = confidence
+        self.factors = factors
+        self.components = components
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "score": self.score,
+            "level": self.level,
+            "confidence": self.confidence,
+            "factors": list(self.factors),
+            "components": dict(self.components),
+        }
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -76,7 +89,7 @@ def assess_leak_risk(
     else:
         level = "normal"
 
-    factors: list[str] = []
+    factors = []  # type: List[str]
     if pressure_drop >= 0.25:
         factors.append("管内压力较基线明显下降")
     if flow_imbalance >= 0.25:

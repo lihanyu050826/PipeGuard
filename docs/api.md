@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.1.0"}
+{"status":"ok","service":"pipeguard-api","version":"1.1.1"}
 ```
 
 ## 管网总览

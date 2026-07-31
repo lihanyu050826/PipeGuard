@@ -1,14 +1,12 @@
 """Thread-safe in-memory data store and telemetry simulator."""
 
-from __future__ import annotations
-
 import math
 import random
 import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from .risk import assess_leak_risk
 
@@ -17,7 +15,7 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-PIPELINES: list[dict[str, Any]] = [
+PIPELINES = [  # type: List[Dict[str, Any]]
     {
         "id": "PL-001",
         "name": "北区输油干线",
@@ -54,18 +52,18 @@ PIPELINES: list[dict[str, Any]] = [
 class MonitoringStore:
     """Owns live snapshots, histories and alert lifecycle."""
 
-    def __init__(self, *, seed: int | None = None) -> None:
+    def __init__(self, *, seed: Optional[int] = None) -> None:
         self._lock = threading.RLock()
         self._random = random.Random(seed)
         self._tick = 0
         self._alert_seq = 2
         self._work_order_seq = 2
-        self._leak_ticks: dict[str, int] = {}
-        self._snapshots: dict[str, dict[str, Any]] = {}
-        self._history: dict[str, deque[dict[str, Any]]] = {
+        self._leak_ticks = {}  # type: Dict[str, int]
+        self._snapshots = {}  # type: Dict[str, Dict[str, Any]]
+        self._history = {  # type: Dict[str, Deque[Dict[str, Any]]]
             pipeline["id"]: deque(maxlen=60) for pipeline in PIPELINES
         }
-        self._alerts: list[dict[str, Any]] = [
+        self._alerts = [  # type: List[Dict[str, Any]]
             {
                 "id": "ALT-0002",
                 "pipeline_id": "PL-002",
@@ -89,7 +87,7 @@ class MonitoringStore:
                 "acknowledged_at": utc_now(),
             },
         ]
-        self._work_orders: list[dict[str, Any]] = [
+        self._work_orders = [  # type: List[Dict[str, Any]]
             {
                 "id": "WO-0002",
                 "title": "东区振动传感器复核",
@@ -209,7 +207,7 @@ class MonitoringStore:
             },
         )
 
-    def overview(self) -> dict[str, Any]:
+    def overview(self) -> Dict[str, Any]:
         with self._lock:
             pipelines = self.pipelines()
             open_alerts = sum(
@@ -230,7 +228,7 @@ class MonitoringStore:
                 "pipelines": pipelines,
             }
 
-    def pipelines(self) -> list[dict[str, Any]]:
+    def pipelines(self) -> List[Dict[str, Any]]:
         with self._lock:
             result = []
             for pipeline in PIPELINES:
@@ -244,7 +242,7 @@ class MonitoringStore:
                 )
             return result
 
-    def pipeline(self, pipe_id: str) -> dict[str, Any] | None:
+    def pipeline(self, pipe_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             pipeline = next((p for p in PIPELINES if p["id"] == pipe_id), None)
             if not pipeline:
@@ -256,11 +254,11 @@ class MonitoringStore:
                 "history": list(self._history[pipe_id]),
             }
 
-    def alerts(self) -> list[dict[str, Any]]:
+    def alerts(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(alert) for alert in self._alerts]
 
-    def work_orders(self) -> list[dict[str, Any]]:
+    def work_orders(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(work_order) for work_order in self._work_orders]
 
@@ -270,7 +268,7 @@ class MonitoringStore:
         *,
         assignee: str = "值班运维组",
         description: str = "",
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """Create one work order from an alert.
 
         The tuple contains the order and an optional conflict reason.
@@ -320,7 +318,7 @@ class MonitoringStore:
 
     def update_work_order(
         self, work_order_id: str, status: str
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         allowed = {
             "pending": {"in_progress"},
             "in_progress": {"completed"},
@@ -355,7 +353,7 @@ class MonitoringStore:
                     alert["status"] = "resolved"
             return dict(work_order), None
 
-    def analytics(self) -> dict[str, Any]:
+    def analytics(self) -> Dict[str, Any]:
         with self._lock:
             risk_scores = [
                 self._snapshots[pipeline["id"]]["risk"]["score"]
@@ -396,7 +394,7 @@ class MonitoringStore:
                 },
             }
 
-    def acknowledge(self, alert_id: str) -> dict[str, Any] | None:
+    def acknowledge(self, alert_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             for alert in self._alerts:
                 if alert["id"] == alert_id:
@@ -424,7 +422,7 @@ class Simulator:
         self.store = store
         self.interval = interval
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._thread = None  # type: Optional[threading.Thread]
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():

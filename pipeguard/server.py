@@ -1,7 +1,5 @@
 """Small standard-library HTTP API and static file server."""
 
-from __future__ import annotations
-
 import argparse
 import csv
 import io
@@ -11,8 +9,10 @@ import re
 import signal
 import sys
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from .store import MonitoringStore, Simulator
@@ -20,10 +20,11 @@ from .store import MonitoringStore, Simulator
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 
 
-class PipeGuardServer(ThreadingHTTPServer):
+class PipeGuardServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+    allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], store: MonitoringStore):
+    def __init__(self, address: Tuple[str, int], store: MonitoringStore):
         super().__init__(address, RequestHandler)
         self.store = store
 
@@ -53,7 +54,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
 
-    def _csv(self, rows: list[dict[str, object]], filename: str) -> None:
+    def _csv(self, rows: List[Dict[str, object]], filename: str) -> None:
         output = io.StringIO()
         columns = [
             "告警编号",
@@ -100,8 +101,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        pipeline_match = re.fullmatch(r"/api/pipelines/([A-Za-z0-9-]+)", path)
         if path == "/api/health":
-            self._json({"status": "ok", "service": "pipeguard-api", "version": "1.1.0"})
+            self._json({"status": "ok", "service": "pipeguard-api", "version": "1.1.1"})
         elif path == "/api/overview":
             self._json(self.server.store.overview())
         elif path == "/api/pipelines":
@@ -114,8 +116,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.store.analytics())
         elif path == "/api/export/alerts.csv":
             self._csv(self.server.store.alerts(), "pipeguard-alerts.csv")
-        elif match := re.fullmatch(r"/api/pipelines/([A-Za-z0-9-]+)", path):
-            pipeline = self.server.store.pipeline(match.group(1))
+        elif pipeline_match:
+            pipeline = self.server.store.pipeline(pipeline_match.group(1))
             if pipeline:
                 self._json(pipeline)
             else:
@@ -127,6 +129,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        alert_match = re.fullmatch(r"/api/alerts/([A-Za-z0-9-]+)/ack", path)
+        work_order_match = re.fullmatch(
+            r"/api/work-orders/([A-Za-z0-9-]+)/status", path
+        )
         if path == "/api/simulate/leak":
             pipe_id = self._body().get("pipeline_id", "PL-001")
             if self.server.store.simulate_leak(pipe_id):
@@ -139,8 +145,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self._json({"error": "pipeline_not_found"}, HTTPStatus.NOT_FOUND)
-        elif match := re.fullmatch(r"/api/alerts/([A-Za-z0-9-]+)/ack", path):
-            alert = self.server.store.acknowledge(match.group(1))
+        elif alert_match:
+            alert = self.server.store.acknowledge(alert_match.group(1))
             if alert:
                 self._json(alert)
             else:
@@ -161,11 +167,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self._json(work_order, HTTPStatus.CREATED)
-        elif match := re.fullmatch(
-            r"/api/work-orders/([A-Za-z0-9-]+)/status", path
-        ):
+        elif work_order_match:
             work_order, error = self.server.store.update_work_order(
-                match.group(1), str(self._body().get("status", ""))
+                work_order_match.group(1), str(self._body().get("status", ""))
             )
             if error == "work_order_not_found":
                 self._json({"error": error}, HTTPStatus.NOT_FOUND)
@@ -199,7 +203,7 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     *,
-    store: MonitoringStore | None = None,
+    store: Optional[MonitoringStore] = None,
 ) -> PipeGuardServer:
     return PipeGuardServer((host, port), store or MonitoringStore())
 

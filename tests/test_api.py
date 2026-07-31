@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.1.0")
+        self.assertEqual(body["version"], "1.1.1")
 
     def test_overview_contains_three_pipelines(self):
         _, body = self.request("/api/overview")
