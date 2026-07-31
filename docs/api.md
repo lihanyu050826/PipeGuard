@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.0.0"}
+{"status":"ok","service":"pipeguard-api","version":"1.1.0"}
 ```
 
 ## 管网总览
@@ -71,6 +71,56 @@ Content-Type: application/json
 ```
 
 该接口具备幂等性；重复确认不会创建新事件。
+
+## 运维工单
+
+查询全部工单：
+
+```http
+GET /api/work-orders
+```
+
+由告警创建工单：
+
+```http
+POST /api/work-orders
+Content-Type: application/json
+
+{
+  "alert_id": "ALT-0003",
+  "assignee": "值班运维组",
+  "description": "现场复核压力与阀室状态"
+}
+```
+
+同一告警只能关联一个工单。工单创建后，相应告警会自动变为 `acknowledged`。
+
+推进工单状态：
+
+```http
+POST /api/work-orders/WO-0003/status
+Content-Type: application/json
+
+{"status":"in_progress"}
+```
+
+状态只能按 `pending` → `in_progress` → `completed` 顺序流转；工单完成后，相应告警自动变为 `resolved`。
+
+## 运营分析
+
+```http
+GET /api/analytics
+```
+
+返回正常、警告、严重管线数量，告警闭环率，工单完成率及各状态数量。
+
+## 导出告警
+
+```http
+GET /api/export/alerts.csv
+```
+
+返回带 UTF-8 BOM 的 CSV 文件，可直接使用 Excel 打开并用于课程报告留档。
 
 ## 注入泄漏演示
 

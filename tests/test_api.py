@@ -38,6 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["version"], "1.1.0")
 
     def test_overview_contains_three_pipelines(self):
         _, body = self.request("/api/overview")
@@ -79,6 +80,53 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(acknowledged["status"], "acknowledged")
         self.assertIsNotNone(acknowledged["acknowledged_at"])
+
+        status, order = self.request(
+            "/api/work-orders",
+            method="POST",
+            payload={"alert_id": alert["id"], "assignee": "测试运维员"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(order["status"], "pending")
+        self.assertEqual(order["alert_id"], alert["id"])
+        self.assertEqual(order["assignee"], "测试运维员")
+
+        _, in_progress = self.request(
+            f"/api/work-orders/{order['id']}/status",
+            method="POST",
+            payload={"status": "in_progress"},
+        )
+        self.assertEqual(in_progress["status"], "in_progress")
+
+        _, completed = self.request(
+            f"/api/work-orders/{order['id']}/status",
+            method="POST",
+            payload={"status": "completed"},
+        )
+        self.assertEqual(completed["status"], "completed")
+
+        _, alerts_after = self.request("/api/alerts")
+        resolved = next(item for item in alerts_after["items"] if item["id"] == alert["id"])
+        self.assertEqual(resolved["status"], "resolved")
+
+    def test_analytics_summarizes_operations(self):
+        _, body = self.request("/api/analytics")
+        self.assertIn("risk", body)
+        self.assertIn("alerts", body)
+        self.assertIn("work_orders", body)
+        self.assertGreaterEqual(body["work_orders"]["total"], 2)
+        self.assertGreaterEqual(body["alerts"]["closure_rate"], 0)
+
+    def test_alert_export_is_utf8_csv(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/export/alerts.csv"
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.headers["Content-Type"].startswith("text/csv"))
+            self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
+            self.assertIn("告警编号", body.decode("utf-8-sig"))
 
 
 if __name__ == "__main__":

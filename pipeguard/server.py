@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import mimetypes
 import re
@@ -51,6 +53,44 @@ class RequestHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
 
+    def _csv(self, rows: list[dict[str, object]], filename: str) -> None:
+        output = io.StringIO()
+        columns = [
+            "告警编号",
+            "级别",
+            "告警事件",
+            "管线编号",
+            "管线名称",
+            "状态",
+            "工单编号",
+            "发生时间",
+        ]
+        writer = csv.writer(output)
+        writer.writerow(columns)
+        for alert in rows:
+            writer.writerow(
+                [
+                    alert["id"],
+                    alert["level"],
+                    alert["title"],
+                    alert["pipeline_id"],
+                    alert["pipeline_name"],
+                    alert["status"],
+                    alert.get("work_order_id", ""),
+                    alert["created_at"],
+                ]
+            )
+        body = ("\ufeff" + output.getvalue()).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -61,13 +101,19 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/health":
-            self._json({"status": "ok", "service": "pipeguard-api", "version": "1.0.0"})
+            self._json({"status": "ok", "service": "pipeguard-api", "version": "1.1.0"})
         elif path == "/api/overview":
             self._json(self.server.store.overview())
         elif path == "/api/pipelines":
             self._json({"items": self.server.store.pipelines()})
         elif path == "/api/alerts":
             self._json({"items": self.server.store.alerts()})
+        elif path == "/api/work-orders":
+            self._json({"items": self.server.store.work_orders()})
+        elif path == "/api/analytics":
+            self._json(self.server.store.analytics())
+        elif path == "/api/export/alerts.csv":
+            self._csv(self.server.store.alerts(), "pipeguard-alerts.csv")
         elif match := re.fullmatch(r"/api/pipelines/([A-Za-z0-9-]+)", path):
             pipeline = self.server.store.pipeline(match.group(1))
             if pipeline:
@@ -99,6 +145,34 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json(alert)
             else:
                 self._json({"error": "alert_not_found"}, HTTPStatus.NOT_FOUND)
+        elif path == "/api/work-orders":
+            body = self._body()
+            work_order, error = self.server.store.create_work_order(
+                str(body.get("alert_id", "")),
+                assignee=str(body.get("assignee", "")),
+                description=str(body.get("description", "")),
+            )
+            if error == "alert_not_found":
+                self._json({"error": error}, HTTPStatus.NOT_FOUND)
+            elif error == "work_order_exists":
+                self._json(
+                    {"error": error, "work_order": work_order},
+                    HTTPStatus.CONFLICT,
+                )
+            else:
+                self._json(work_order, HTTPStatus.CREATED)
+        elif match := re.fullmatch(
+            r"/api/work-orders/([A-Za-z0-9-]+)/status", path
+        ):
+            work_order, error = self.server.store.update_work_order(
+                match.group(1), str(self._body().get("status", ""))
+            )
+            if error == "work_order_not_found":
+                self._json({"error": error}, HTTPStatus.NOT_FOUND)
+            elif error:
+                self._json({"error": error}, HTTPStatus.CONFLICT)
+            else:
+                self._json(work_order)
         else:
             self._json({"error": "endpoint_not_found"}, HTTPStatus.NOT_FOUND)
 

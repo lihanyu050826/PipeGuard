@@ -7,7 +7,7 @@ import random
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .risk import assess_leak_risk
@@ -59,6 +59,7 @@ class MonitoringStore:
         self._random = random.Random(seed)
         self._tick = 0
         self._alert_seq = 2
+        self._work_order_seq = 2
         self._leak_ticks: dict[str, int] = {}
         self._snapshots: dict[str, dict[str, Any]] = {}
         self._history: dict[str, deque[dict[str, Any]]] = {
@@ -88,6 +89,42 @@ class MonitoringStore:
                 "acknowledged_at": utc_now(),
             },
         ]
+        self._work_orders: list[dict[str, Any]] = [
+            {
+                "id": "WO-0002",
+                "title": "东区振动传感器复核",
+                "pipeline_id": "PL-002",
+                "pipeline_name": "东区天然气支线",
+                "alert_id": "ALT-0002",
+                "priority": "medium",
+                "status": "completed",
+                "assignee": "王工",
+                "description": "复核振动传感器安装状态并检查历史波形。",
+                "created_at": utc_now(),
+                "due_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat(
+                    timespec="seconds"
+                ),
+                "updated_at": utc_now(),
+            },
+            {
+                "id": "WO-0001",
+                "title": "南区流量计现场校验",
+                "pipeline_id": "PL-003",
+                "pipeline_name": "南区成品油管线",
+                "alert_id": "ALT-0001",
+                "priority": "high",
+                "status": "in_progress",
+                "assignee": "李工",
+                "description": "校验出口流量计零点，检查阀门与管段是否存在异常。",
+                "created_at": utc_now(),
+                "due_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(
+                    timespec="seconds"
+                ),
+                "updated_at": utc_now(),
+            },
+        ]
+        self._alerts[0]["work_order_id"] = "WO-0002"
+        self._alerts[1]["work_order_id"] = "WO-0001"
         for _ in range(32):
             self.advance()
 
@@ -222,6 +259,142 @@ class MonitoringStore:
     def alerts(self) -> list[dict[str, Any]]:
         with self._lock:
             return [dict(alert) for alert in self._alerts]
+
+    def work_orders(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(work_order) for work_order in self._work_orders]
+
+    def create_work_order(
+        self,
+        alert_id: str,
+        *,
+        assignee: str = "值班运维组",
+        description: str = "",
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Create one work order from an alert.
+
+        The tuple contains the order and an optional conflict reason.
+        """
+
+        with self._lock:
+            alert = next((item for item in self._alerts if item["id"] == alert_id), None)
+            if not alert:
+                return None, "alert_not_found"
+            if alert.get("work_order_id"):
+                existing = next(
+                    (
+                        item
+                        for item in self._work_orders
+                        if item["id"] == alert["work_order_id"]
+                    ),
+                    None,
+                )
+                return (dict(existing) if existing else None), "work_order_exists"
+
+            self._work_order_seq += 1
+            priority = "urgent" if alert["level"] == "critical" else "high"
+            due_hours = 2 if priority == "urgent" else 8
+            now = datetime.now(timezone.utc)
+            work_order = {
+                "id": f"WO-{self._work_order_seq:04d}",
+                "title": f"{alert['pipeline_name']}异常处置",
+                "pipeline_id": alert["pipeline_id"],
+                "pipeline_name": alert["pipeline_name"],
+                "alert_id": alert["id"],
+                "priority": priority,
+                "status": "pending",
+                "assignee": assignee.strip() or "值班运维组",
+                "description": description.strip() or alert["description"],
+                "created_at": now.isoformat(timespec="seconds"),
+                "due_at": (now + timedelta(hours=due_hours)).isoformat(
+                    timespec="seconds"
+                ),
+                "updated_at": now.isoformat(timespec="seconds"),
+            }
+            self._work_orders.insert(0, work_order)
+            alert["work_order_id"] = work_order["id"]
+            if alert["status"] == "open":
+                alert["status"] = "acknowledged"
+                alert["acknowledged_at"] = utc_now()
+            return dict(work_order), None
+
+    def update_work_order(
+        self, work_order_id: str, status: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        allowed = {
+            "pending": {"in_progress"},
+            "in_progress": {"completed"},
+            "completed": set(),
+        }
+        if status not in allowed:
+            return None, "invalid_status"
+        with self._lock:
+            work_order = next(
+                (item for item in self._work_orders if item["id"] == work_order_id),
+                None,
+            )
+            if not work_order:
+                return None, "work_order_not_found"
+            current = work_order["status"]
+            if status == current:
+                return dict(work_order), None
+            if status not in allowed[current]:
+                return None, "invalid_transition"
+            work_order["status"] = status
+            work_order["updated_at"] = utc_now()
+            if status == "completed":
+                alert = next(
+                    (
+                        item
+                        for item in self._alerts
+                        if item["id"] == work_order["alert_id"]
+                    ),
+                    None,
+                )
+                if alert:
+                    alert["status"] = "resolved"
+            return dict(work_order), None
+
+    def analytics(self) -> dict[str, Any]:
+        with self._lock:
+            risk_scores = [
+                self._snapshots[pipeline["id"]]["risk"]["score"]
+                for pipeline in PIPELINES
+            ]
+            status_counts = {
+                status: sum(order["status"] == status for order in self._work_orders)
+                for status in ("pending", "in_progress", "completed")
+            }
+            alert_counts = {
+                level: sum(alert["level"] == level for alert in self._alerts)
+                for level in ("warning", "critical")
+            }
+            completed = status_counts["completed"]
+            return {
+                "generated_at": utc_now(),
+                "risk": {
+                    "average": round(sum(risk_scores) / len(risk_scores), 1),
+                    "maximum": round(max(risk_scores), 1),
+                    "healthy_pipelines": sum(score < 35 for score in risk_scores),
+                },
+                "alerts": {
+                    "total": len(self._alerts),
+                    "by_level": alert_counts,
+                    "closure_rate": round(
+                        sum(alert["status"] == "resolved" for alert in self._alerts)
+                        / max(1, len(self._alerts))
+                        * 100,
+                        1,
+                    ),
+                },
+                "work_orders": {
+                    "total": len(self._work_orders),
+                    "by_status": status_counts,
+                    "completion_rate": round(
+                        completed / max(1, len(self._work_orders)) * 100, 1
+                    ),
+                },
+            }
 
     def acknowledge(self, alert_id: str) -> dict[str, Any] | None:
         with self._lock:

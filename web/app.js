@@ -2,8 +2,11 @@ const state = {
   overview: null,
   pipelines: [],
   alerts: [],
+  workOrders: [],
+  analytics: null,
   selectedPipeline: "PL-001",
   alertFilter: "all",
+  workFilter: "all",
   refreshTimer: null,
 };
 
@@ -12,6 +15,8 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const levelText = { normal: "运行正常", warning: "注意观察", critical: "高风险" };
 const alertStatusText = { open: "待确认", acknowledged: "已确认", resolved: "已恢复" };
 const componentText = { pressure: "压力异常", flow: "流量平衡", gas: "气体浓度", vibration: "振动信号" };
+const workStatusText = { pending: "待处理", in_progress: "处理中", completed: "已完成" };
+const priorityText = { urgent: "紧急", high: "高", medium: "中" };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -44,12 +49,15 @@ function notify(message) {
 
 async function refreshAll({ quiet = false } = {}) {
   try {
-    const [overview, pipelines, alerts] = await Promise.all([
+    const [overview, pipelines, alerts, workOrders, analytics] = await Promise.all([
       api("/api/overview"), api("/api/pipelines"), api("/api/alerts"),
+      api("/api/work-orders"), api("/api/analytics"),
     ]);
     state.overview = overview;
     state.pipelines = pipelines.items;
     state.alerts = alerts.items;
+    state.workOrders = workOrders.items;
+    state.analytics = analytics;
     $("#error-banner").classList.add("hidden");
     render();
     if (!quiet) notify("监测数据已同步");
@@ -65,7 +73,9 @@ function render() {
   renderRecentAlerts();
   renderSelectors();
   renderAlerts();
+  renderWorkOrders();
   renderDevices();
+  renderAnalytics();
   loadPipelineDetail(state.selectedPipeline);
 }
 
@@ -77,6 +87,7 @@ function renderMetrics() {
   $("#device-ratio").textContent = `/ ${metrics.device_total} 台`;
   $("#metric-alerts").textContent = metrics.open_alerts;
   $("#nav-alert-count").textContent = metrics.open_alerts;
+  $("#nav-work-count").textContent = state.workOrders.filter((item) => item.status !== "completed").length;
   $("#last-updated").textContent = `${formatTime(updatedAt)} 更新`;
 
   const mostRisky = [...state.pipelines].sort(
@@ -237,9 +248,15 @@ function renderAlerts() {
       <td>${alert.pipeline_name}<br><small>${alert.pipeline_id}</small></td>
       <td>${formatDateTime(alert.created_at)}</td>
       <td><span class="status-tag ${alert.status}">${alertStatusText[alert.status]}</span></td>
-      <td><button class="ack-button" data-ack="${alert.id}" ${alert.status !== "open" ? "disabled" : ""}>${alert.status === "open" ? "确认告警" : "已处理"}</button></td>
+      <td>
+        <div class="table-actions">
+          <button class="ack-button" data-ack="${alert.id}" ${alert.status !== "open" ? "disabled" : ""}>${alert.status === "open" ? "确认" : "已确认"}</button>
+          <button class="ack-button order" data-create-order="${alert.id}" ${alert.work_order_id ? "disabled" : ""}>${alert.work_order_id || "转工单"}</button>
+        </div>
+      </td>
     </tr>`).join("") : `<tr><td colspan="6" style="text-align:center;padding:30px;color:#89979c">当前筛选条件下暂无告警</td></tr>`;
   $$("[data-ack]").forEach((button) => button.addEventListener("click", () => acknowledgeAlert(button.dataset.ack)));
+  $$("[data-create-order]").forEach((button) => button.addEventListener("click", () => createWorkOrder(button.dataset.createOrder)));
 }
 
 async function acknowledgeAlert(id) {
@@ -248,6 +265,112 @@ async function acknowledgeAlert(id) {
     notify(`告警 ${id} 已确认`);
     await refreshAll({ quiet: true });
   } catch { notify("操作失败，请稍后重试"); }
+}
+
+async function createWorkOrder(alertId) {
+  const alert = state.alerts.find((item) => item.id === alertId);
+  if (!confirm(`将“${alert?.title}”转为运维工单？`)) return;
+  try {
+    const order = await api("/api/work-orders", {
+      method: "POST",
+      body: JSON.stringify({ alert_id: alertId, assignee: "值班运维组" }),
+    });
+    notify(`工单 ${order.id} 已创建`);
+    await refreshAll({ quiet: true });
+    navigate("workorders");
+  } catch {
+    notify("创建工单失败，请检查该告警是否已转工单");
+  }
+}
+
+function renderWorkOrders() {
+  const counts = state.workOrders.reduce(
+    (acc, order) => ({ ...acc, [order.status]: (acc[order.status] || 0) + 1 }),
+    {},
+  );
+  $("#work-total").textContent = state.workOrders.length;
+  $("#work-pending").textContent = counts.pending || 0;
+  $("#work-progress").textContent = counts.in_progress || 0;
+  const completionRate = state.workOrders.length
+    ? Math.round(((counts.completed || 0) / state.workOrders.length) * 100)
+    : 0;
+  $("#work-rate").textContent = `${completionRate}%`;
+
+  const filtered = state.workFilter === "all"
+    ? state.workOrders
+    : state.workOrders.filter((order) => order.status === state.workFilter);
+  $("#work-order-list").innerHTML = filtered.length ? filtered.map((order) => {
+    const nextStatus = order.status === "pending"
+      ? "in_progress"
+      : order.status === "in_progress" ? "completed" : null;
+    const actionText = order.status === "pending"
+      ? "开始处理"
+      : order.status === "in_progress" ? "完成工单" : "处置完成";
+    return `
+      <article class="panel work-order-card">
+        <div class="work-order-head"><span class="work-order-code">${order.id}</span><span class="work-priority ${order.priority}">${priorityText[order.priority]}优先级</span></div>
+        <h3>${order.title}</h3>
+        <p>${order.description}</p>
+        <div class="work-meta">
+          <div><span>负责人员</span><b>${order.assignee}</b></div>
+          <div><span>关联管线</span><b>${order.pipeline_id}</b></div>
+          <div><span>要求完成</span><b>${formatDateTime(order.due_at)}</b></div>
+        </div>
+        <div class="work-footer">
+          <span class="work-status ${order.status}">${workStatusText[order.status]}</span>
+          <button class="work-action" data-work-id="${order.id}" data-work-status="${nextStatus || ""}" ${nextStatus ? "" : "disabled"}>${actionText}</button>
+        </div>
+      </article>`;
+  }).join("") : `<article class="panel empty-state">当前筛选条件下暂无工单</article>`;
+
+  $$("[data-work-id]").forEach((button) => button.addEventListener("click", () => {
+    updateWorkOrder(button.dataset.workId, button.dataset.workStatus);
+  }));
+}
+
+async function updateWorkOrder(id, status) {
+  if (!status) return;
+  try {
+    const order = await api(`/api/work-orders/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    });
+    notify(`${order.id} 已更新为“${workStatusText[order.status]}”`);
+    await refreshAll({ quiet: true });
+  } catch {
+    notify("工单状态更新失败");
+  }
+}
+
+function renderAnalytics() {
+  if (!state.analytics) return;
+  const { risk, alerts, work_orders: workOrders, generated_at: generatedAt } = state.analytics;
+  const operationScore = Math.max(
+    0,
+    Math.round(100 - risk.average * 0.65 - (100 - alerts.closure_rate) * 0.12),
+  );
+  $("#operation-score").textContent = operationScore;
+  $("#analytics-time").textContent = `${formatDateTime(generatedAt)} 生成 · 实时数据`;
+  $("#analytics-conclusion").textContent = operationScore >= 90
+    ? "管网总体运行平稳，风险处于可控范围"
+    : operationScore >= 75 ? "管网运行基本稳定，需跟进未闭环事件" : "存在较高运行风险，请优先组织现场处置";
+  $("#healthy-pipes").textContent = `${risk.healthy_pipelines} / ${state.pipelines.length} 条健康`;
+  $("#pipeline-risk-bars").innerHTML = state.pipelines.map((pipeline) => {
+    const score = pipeline.telemetry.risk.score;
+    const level = pipeline.telemetry.risk.level;
+    return `<div><div class="analytics-bar-head"><span>${pipeline.name}</span><b>${score} 分</b></div><div class="analytics-bar-track"><i class="${level}" style="width:${Math.max(2, score)}%"></i></div></div>`;
+  }).join("");
+  $("#closure-rate").textContent = `闭环率 ${alerts.closure_rate}%`;
+  $("#closure-donut").style.setProperty("--closure", alerts.closure_rate);
+  $("#closure-donut strong").textContent = `${Math.round(alerts.closure_rate)}%`;
+  $("#analytics-alert-total").textContent = alerts.total;
+  $("#analytics-work-total").textContent = workOrders.total;
+  $("#analytics-work-rate").textContent = `${workOrders.completion_rate}%`;
+  $("#operation-advice").textContent = risk.maximum >= 65
+    ? "检测到高风险管线，建议立即创建紧急工单，复核压力、流量与现场气体信号，并按预案隔离相关管段。"
+    : workOrders.by_status.pending > 0
+      ? `当前有 ${workOrders.by_status.pending} 条工单等待处理，建议完成责任分派并在要求时限内反馈现场结果。`
+      : "当前风险与运维任务均处于受控状态，建议保持巡检频次并定期导出告警记录归档。";
 }
 
 function renderDevices() {
@@ -269,12 +392,21 @@ function renderDevices() {
 function navigate(target) {
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.target === target));
   $$(".view").forEach((view) => view.classList.toggle("active", view.id === `${target}-view`));
-  const titles = { overview: "管网运行总览", pipelines: "管线实时监测", alerts: "告警处置中心", devices: "感知设备管理" };
+  const titles = {
+    overview: "管网运行总览",
+    pipelines: "管线实时监测",
+    alerts: "告警处置中心",
+    workorders: "运维工单中心",
+    devices: "感知设备管理",
+    analytics: "运行分析报告",
+  };
   $("#page-title").textContent = titles[target];
   if (target === "pipelines") {
     renderSelectors();
     loadPipelineDetail(state.selectedPipeline);
   }
+  if (target === "workorders") renderWorkOrders();
+  if (target === "analytics") renderAnalytics();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -294,6 +426,11 @@ $$("[data-filter]").forEach((button) => button.addEventListener("click", () => {
   state.alertFilter = button.dataset.filter;
   $$("[data-filter]").forEach((b) => b.classList.toggle("active", b === button));
   renderAlerts();
+}));
+$$("[data-work-filter]").forEach((button) => button.addEventListener("click", () => {
+  state.workFilter = button.dataset.workFilter;
+  $$("[data-work-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  renderWorkOrders();
 }));
 window.addEventListener("resize", () => loadPipelineDetail(state.selectedPipeline));
 

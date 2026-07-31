@@ -30,8 +30,15 @@
           <span class="nav-icon">△</span><span>告警中心</span>
           <span id="nav-alert-count" class="nav-badge">0</span>
         </button>
+        <button class="nav-item" data-target="workorders">
+          <span class="nav-icon">▣</span><span>运维工单</span>
+          <span id="nav-work-count" class="nav-badge work">0</span>
+        </button>
         <button class="nav-item" data-target="devices">
           <span class="nav-icon">◫</span><span>设备管理</span>
+        </button>
+        <button class="nav-item" data-target="analytics">
+          <span class="nav-icon">⌁</span><span>分析报告</span>
         </button>
       </nav>
 
@@ -235,11 +242,58 @@
         </article>
       </section>
 
+      <section id="workorders-view" class="view">
+        <div class="section-intro">
+          <div><span class="section-kicker">MAINTENANCE WORKFLOW</span><h2>运维工单</h2><p>将告警转化为可跟踪、可分派、可闭环的现场任务。</p></div>
+          <div class="filter-chips"><button class="active" data-work-filter="all">全部</button><button data-work-filter="pending">待处理</button><button data-work-filter="in_progress">处理中</button><button data-work-filter="completed">已完成</button></div>
+        </div>
+        <div class="work-summary">
+          <article class="panel"><span>工单总数</span><strong id="work-total">0</strong><small>累计任务</small></article>
+          <article class="panel"><span>待处理</span><strong id="work-pending">0</strong><small>等待分派</small></article>
+          <article class="panel"><span>处理中</span><strong id="work-progress">0</strong><small>现场处置</small></article>
+          <article class="panel"><span>闭环率</span><strong id="work-rate">0%</strong><small>完成工单占比</small></article>
+        </div>
+        <div id="work-order-list" class="work-order-grid"></div>
+      </section>
+
       <section id="devices-view" class="view">
         <div class="section-intro">
           <div><span class="section-kicker">DEVICE CONNECTIVITY</span><h2>设备管理</h2><p>端侧感知设备与边缘网关连接状态。</p></div>
         </div>
         <div class="device-grid" id="device-grid"></div>
+      </section>
+
+      <section id="analytics-view" class="view">
+        <div class="section-intro">
+          <div><span class="section-kicker">OPERATION ANALYTICS</span><h2>运行分析报告</h2><p>汇总风险、告警和工单闭环数据，为运维决策提供依据。</p></div>
+          <a class="export-button" href="/api/export/alerts.csv" download>导出告警 CSV <span>↓</span></a>
+        </div>
+        <div class="analytics-hero panel">
+          <div><span>综合运行评分</span><strong id="operation-score">—</strong><small>分 / 100</small></div>
+          <div class="analytics-copy"><b id="analytics-conclusion">正在生成运行结论</b><p id="analytics-time">数据统计中…</p></div>
+          <div class="report-seal">REPORT<small>实时分析</small></div>
+        </div>
+        <div class="analytics-grid">
+          <article class="panel analytics-panel">
+            <div class="panel-heading"><div><span class="section-kicker">RISK PROFILE</span><h3>管线风险分布</h3></div><span id="healthy-pipes" class="analytics-tag">—</span></div>
+            <div id="pipeline-risk-bars" class="analytics-bars"></div>
+          </article>
+          <article class="panel analytics-panel">
+            <div class="panel-heading"><div><span class="section-kicker">EVENT CLOSURE</span><h3>事件处置效率</h3></div><span id="closure-rate" class="analytics-tag">—</span></div>
+            <div class="donut-layout">
+              <div id="closure-donut" class="closure-donut"><div><strong>0%</strong><span>告警闭环</span></div></div>
+              <div class="analytics-facts">
+                <div><span>告警总数</span><b id="analytics-alert-total">0</b></div>
+                <div><span>工单总数</span><b id="analytics-work-total">0</b></div>
+                <div><span>工单完成率</span><b id="analytics-work-rate">0%</b></div>
+              </div>
+            </div>
+          </article>
+        </div>
+        <article class="panel report-note">
+          <span class="ai-chip">AI</span>
+          <div><h3>运维建议</h3><p id="operation-advice">系统正在根据实时风险与处置进度生成建议。</p></div>
+        </article>
       </section>
     </main>
   </div>
