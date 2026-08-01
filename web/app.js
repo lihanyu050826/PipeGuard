@@ -4,6 +4,8 @@ const state = {
   alerts: [],
   workOrders: [],
   analytics: null,
+  database: null,
+  auditLogs: [],
   selectedPipeline: "PL-001",
   alertFilter: "all",
   workFilter: "all",
@@ -49,15 +51,18 @@ function notify(message) {
 
 async function refreshAll({ quiet = false } = {}) {
   try {
-    const [overview, pipelines, alerts, workOrders, analytics] = await Promise.all([
+    const [overview, pipelines, alerts, workOrders, analytics, database, auditLogs] = await Promise.all([
       api("/api/overview"), api("/api/pipelines"), api("/api/alerts"),
-      api("/api/work-orders"), api("/api/analytics"),
+      api("/api/work-orders"), api("/api/analytics"), api("/api/database"),
+      api("/api/audit-logs"),
     ]);
     state.overview = overview;
     state.pipelines = pipelines.items;
     state.alerts = alerts.items;
     state.workOrders = workOrders.items;
     state.analytics = analytics;
+    state.database = database;
+    state.auditLogs = auditLogs.items;
     $("#error-banner").classList.add("hidden");
     render();
     if (!quiet) notify("监测数据已同步");
@@ -76,6 +81,7 @@ function render() {
   renderWorkOrders();
   renderDevices();
   renderAnalytics();
+  renderDatabase();
   loadPipelineDetail(state.selectedPipeline);
 }
 
@@ -373,6 +379,51 @@ function renderAnalytics() {
       : "当前风险与运维任务均处于受控状态，建议保持巡检频次并定期导出告警记录归档。";
 }
 
+function formatBytes(value) {
+  if (!value) return "0 KB";
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function renderDatabase() {
+  if (!state.database) return;
+  const database = state.database;
+  const tableMap = Object.fromEntries(database.tables.map((table) => [table.name, table]));
+  $("#db-engine").textContent = database.engine;
+  $("#db-version").textContent = database.sqlite_version;
+  $("#db-location").textContent = database.location;
+  $("#db-last-write").textContent = database.last_telemetry_at
+    ? formatDateTime(database.last_telemetry_at)
+    : "等待首个采样";
+  $("#db-size").textContent = `${formatBytes(database.size_bytes)} · Schema v${database.schema_version}`;
+  $("#db-telemetry-count").textContent = tableMap.telemetry?.rows || 0;
+  $("#db-alert-count").textContent = tableMap.alerts?.rows || 0;
+  $("#db-work-count").textContent = tableMap.work_orders?.rows || 0;
+  $("#db-audit-count").textContent = tableMap.audit_logs?.rows || 0;
+  $("#database-table-list").innerHTML = database.tables.map((table) => `
+    <div class="database-table-row">
+      <span class="table-symbol">▦</span>
+      <div><b>${table.name}</b><small>${table.description}</small></div>
+      <strong>${table.rows}<small>ROWS</small></strong>
+    </div>`).join("");
+
+  const actionText = {
+    database_initialized: "数据库初始化",
+    scenario_injected: "演示场景注入",
+    alert_created: "系统生成告警",
+    alert_acknowledged: "人工确认告警",
+    work_order_created: "创建运维工单",
+    work_order_status_changed: "更新工单状态",
+  };
+  $("#audit-log-list").innerHTML = state.auditLogs.length
+    ? state.auditLogs.slice(0, 8).map((log) => `
+      <div class="audit-log-row">
+        <span class="audit-node"></span>
+        <div><b>${actionText[log.action] || log.action}</b><p>${log.detail}</p><small>${formatDateTime(log.created_at)} · ${log.entity_id}</small></div>
+      </div>`).join("")
+    : `<div class="audit-empty">暂无操作审计记录</div>`;
+}
+
 function renderDevices() {
   const types = [
     ["压力变送器", "PT", "0–10 MPa", "±0.25% FS"],
@@ -399,6 +450,7 @@ function navigate(target) {
     workorders: "运维工单中心",
     devices: "感知设备管理",
     analytics: "运行分析报告",
+    database: "持久化数据中心",
   };
   $("#page-title").textContent = titles[target];
   if (target === "pipelines") {
@@ -407,6 +459,7 @@ function navigate(target) {
   }
   if (target === "workorders") renderWorkOrders();
   if (target === "analytics") renderAnalytics();
+  if (target === "database") renderDatabase();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 

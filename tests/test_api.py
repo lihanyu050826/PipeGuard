@@ -38,7 +38,8 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.1.1")
+        self.assertEqual(body["version"], "1.2.0")
+        self.assertEqual(body["database"], "connected")
 
     def test_overview_contains_three_pipelines(self):
         _, body = self.request("/api/overview")
@@ -117,6 +118,18 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(body["work_orders"]["total"], 2)
         self.assertGreaterEqual(body["alerts"]["closure_rate"], 0)
 
+    def test_database_and_audit_endpoints(self):
+        _, database = self.request("/api/database")
+        self.assertEqual(database["engine"], "SQLite")
+        self.assertEqual(database["schema_version"], "1")
+        table_names = {table["name"] for table in database["tables"]}
+        self.assertEqual(
+            table_names, {"telemetry", "alerts", "work_orders", "audit_logs"}
+        )
+
+        _, audit_logs = self.request("/api/audit-logs")
+        self.assertGreaterEqual(len(audit_logs["items"]), 1)
+
     def test_alert_export_is_utf8_csv(self):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/api/export/alerts.csv"
@@ -127,6 +140,17 @@ class ApiTests(unittest.TestCase):
             self.assertTrue(response.headers["Content-Type"].startswith("text/csv"))
             self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
             self.assertIn("告警编号", body.decode("utf-8-sig"))
+
+    def test_work_order_export_is_utf8_csv(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/export/work-orders.csv"
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.headers["Content-Type"].startswith("text/csv"))
+            self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
+            self.assertIn("工单编号", body.decode("utf-8-sig"))
 
 
 if __name__ == "__main__":

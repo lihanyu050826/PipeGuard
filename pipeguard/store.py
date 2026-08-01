@@ -1,4 +1,4 @@
-"""Thread-safe in-memory data store and telemetry simulator."""
+"""Thread-safe monitoring state backed by SQLite persistence."""
 
 import math
 import random
@@ -8,6 +8,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+from .database import Database
 from .risk import assess_leak_risk
 
 
@@ -50,20 +51,21 @@ PIPELINES = [  # type: List[Dict[str, Any]]
 
 
 class MonitoringStore:
-    """Owns live snapshots, histories and alert lifecycle."""
+    """Owns live snapshots and coordinates persistent business state."""
 
-    def __init__(self, *, seed: Optional[int] = None) -> None:
+    def __init__(
+        self, *, seed: Optional[int] = None, database_path: Optional[str] = None
+    ) -> None:
         self._lock = threading.RLock()
         self._random = random.Random(seed)
+        self._database = Database(database_path or ":memory:")
         self._tick = 0
-        self._alert_seq = 2
-        self._work_order_seq = 2
         self._leak_ticks = {}  # type: Dict[str, int]
         self._snapshots = {}  # type: Dict[str, Dict[str, Any]]
         self._history = {  # type: Dict[str, Deque[Dict[str, Any]]]
             pipeline["id"]: deque(maxlen=60) for pipeline in PIPELINES
         }
-        self._alerts = [  # type: List[Dict[str, Any]]
+        initial_alerts = [  # type: List[Dict[str, Any]]
             {
                 "id": "ALT-0002",
                 "pipeline_id": "PL-002",
@@ -87,7 +89,7 @@ class MonitoringStore:
                 "acknowledged_at": utc_now(),
             },
         ]
-        self._work_orders = [  # type: List[Dict[str, Any]]
+        initial_work_orders = [  # type: List[Dict[str, Any]]
             {
                 "id": "WO-0002",
                 "title": "东区振动传感器复核",
@@ -121,10 +123,38 @@ class MonitoringStore:
                 "updated_at": utc_now(),
             },
         ]
-        self._alerts[0]["work_order_id"] = "WO-0002"
-        self._alerts[1]["work_order_id"] = "WO-0001"
-        for _ in range(32):
+        initial_alerts[0]["work_order_id"] = "WO-0002"
+        initial_alerts[1]["work_order_id"] = "WO-0001"
+        self._database.initialize(initial_alerts, initial_work_orders)
+        self._alerts = self._database.load_alerts()
+        self._work_orders = self._database.load_work_orders()
+        self._alert_seq = self._maximum_sequence(self._alerts)
+        self._work_order_seq = self._maximum_sequence(self._work_orders)
+
+        history_available = True
+        for pipeline in PIPELINES:
+            pipe_id = pipeline["id"]
+            samples = self._database.load_recent_telemetry(pipe_id, 60)
+            self._history[pipe_id].extend(samples)
+            if samples:
+                self._snapshots[pipe_id] = samples[-1]
+            else:
+                history_available = False
+        if history_available:
             self.advance()
+        else:
+            for _ in range(32):
+                self.advance()
+
+    @staticmethod
+    def _maximum_sequence(items: List[Dict[str, Any]]) -> int:
+        values = []
+        for item in items:
+            try:
+                values.append(int(str(item["id"]).split("-")[-1]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return max(values or [0])
 
     def advance(self) -> None:
         """Generate one sample for every pipeline."""
@@ -180,31 +210,46 @@ class MonitoringStore:
                 previous = self._snapshots.get(pipe_id)
                 self._snapshots[pipe_id] = sample
                 self._history[pipe_id].append(sample)
+                self._database.save_telemetry(pipe_id, sample)
 
                 if (
                     risk.level == "critical"
                     and (not previous or previous["risk"]["level"] != "critical")
                 ):
                     self._create_alert(pipeline, risk, sample)
+            if self._tick % 30 == 0:
+                self._database.prune_telemetry(
+                    [pipeline["id"] for pipeline in PIPELINES]
+                )
 
     def _create_alert(self, pipeline: dict, risk: Any, sample: dict) -> None:
         self._alert_seq += 1
+        alert = {
+            "id": f"ALT-{self._alert_seq:04d}",
+            "pipeline_id": pipeline["id"],
+            "pipeline_name": pipeline["name"],
+            "level": "critical",
+            "title": "疑似管道泄漏",
+            "description": (
+                f"融合风险 {risk.score:.0f} 分；压力 {sample['pressure']} MPa，"
+                f"进出口流量差 {sample['inlet_flow'] - sample['outlet_flow']:.1f} m³/h。"
+            ),
+            "status": "open",
+            "created_at": utc_now(),
+            "acknowledged_at": None,
+        }
         self._alerts.insert(
             0,
-            {
-                "id": f"ALT-{self._alert_seq:04d}",
-                "pipeline_id": pipeline["id"],
-                "pipeline_name": pipeline["name"],
-                "level": "critical",
-                "title": "疑似管道泄漏",
-                "description": (
-                    f"融合风险 {risk.score:.0f} 分；压力 {sample['pressure']} MPa，"
-                    f"进出口流量差 {sample['inlet_flow'] - sample['outlet_flow']:.1f} m³/h。"
-                ),
-                "status": "open",
-                "created_at": utc_now(),
-                "acknowledged_at": None,
-            },
+            alert,
+        )
+        self._database.save_alert(alert)
+        self._database.add_audit(
+            "alert_created",
+            "alert",
+            alert["id"],
+            "{}产生严重告警，风险评分为{}。".format(
+                pipeline["name"], round(risk.score)
+            ),
         )
 
     def overview(self) -> Dict[str, Any]:
@@ -314,6 +359,16 @@ class MonitoringStore:
             if alert["status"] == "open":
                 alert["status"] = "acknowledged"
                 alert["acknowledged_at"] = utc_now()
+            self._database.save_alert(alert)
+            self._database.save_work_order(work_order)
+            self._database.add_audit(
+                "work_order_created",
+                "work_order",
+                work_order["id"],
+                "由告警{}创建，负责人为{}。".format(
+                    alert["id"], work_order["assignee"]
+                ),
+            )
             return dict(work_order), None
 
     def update_work_order(
@@ -351,6 +406,14 @@ class MonitoringStore:
                 )
                 if alert:
                     alert["status"] = "resolved"
+                    self._database.save_alert(alert)
+            self._database.save_work_order(work_order)
+            self._database.add_audit(
+                "work_order_status_changed",
+                "work_order",
+                work_order["id"],
+                "工单状态由{}更新为{}。".format(current, status),
+            )
             return dict(work_order), None
 
     def analytics(self) -> Dict[str, Any]:
@@ -401,6 +464,13 @@ class MonitoringStore:
                     if alert["status"] == "open":
                         alert["status"] = "acknowledged"
                         alert["acknowledged_at"] = utc_now()
+                        self._database.save_alert(alert)
+                        self._database.add_audit(
+                            "alert_acknowledged",
+                            "alert",
+                            alert["id"],
+                            "值班人员确认告警，等待现场处置。",
+                        )
                     return dict(alert)
         return None
 
@@ -409,10 +479,25 @@ class MonitoringStore:
             if not any(p["id"] == pipe_id for p in PIPELINES):
                 return False
             self._leak_ticks[pipe_id] = 120
+            self._database.add_audit(
+                "scenario_injected",
+                "pipeline",
+                pipe_id,
+                "课程演示注入模拟泄漏场景。",
+            )
             # Advance enough to make the effect immediately visible.
             for _ in range(16):
                 self.advance()
             return True
+
+    def database_summary(self) -> Dict[str, Any]:
+        return self._database.summary()
+
+    def audit_logs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._database.audit_logs(limit)
+
+    def close(self) -> None:
+        self._database.close()
 
 
 class Simulator:

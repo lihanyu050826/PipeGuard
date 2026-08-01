@@ -3,7 +3,7 @@
 > 工业互联网概论课程小组项目：利用多源传感、边缘计算与云端可视化，实现油气管道运行状态监测、泄漏风险研判和告警处置闭环。
 
 [![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.1.1-2563eb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-2563eb)](CHANGELOG.md)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-0b8b80)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
@@ -13,7 +13,7 @@
 
 - **端侧感知**：模拟压力、进出口流量、可燃气体和振动等工业传感器；
 - **边缘分析**：通过质量守恒与多信号关联，在数据源附近实时计算风险；
-- **平台服务**：提供统一 HTTP API、设备状态、告警与工单生命周期管理；
+- **平台服务**：提供统一 HTTP API、SQLite 数据持久化、告警与工单生命周期管理；
 - **应用展示**：以 Web 监控大屏展示管网状态、趋势、研判依据、运维进度与分析报告。
 
 项目只使用 Python 标准库和原生 HTML/CSS/JavaScript，无需安装第三方依赖，适合课堂演示和原理讲解。
@@ -28,6 +28,10 @@
 - 告警一键转工单，支持待处理、处理中、已完成的规范化流转
 - 风险分布、告警闭环率、工单完成率和运行评分统计
 - 告警记录一键导出 CSV，便于课程报告留档
+- SQLite 持久化遥测、告警和工单，服务重启后业务数据不丢失
+- 操作审计日志记录场景注入、告警确认和工单流转
+- 数据中心展示数据库状态、四张核心表规模与最近操作
+- 告警和工单均支持 CSV 导出
 - 响应式页面，适配桌面、平板和手机
 - 标准库单元测试与 API 集成测试
 
@@ -49,6 +53,12 @@ python run.py
 python run.py --host 0.0.0.0 --port 8080
 ```
 
+默认数据库文件为 `data/pipeguard.db`，也可以指定其他位置：
+
+```bash
+python run.py --database /opt/pipeguard/data/pipeguard.db
+```
+
 ### 演示泄漏预警
 
 1. 打开“管线监测”；
@@ -57,9 +67,10 @@ python run.py --host 0.0.0.0 --port 8080
 4. 观察压力下降、进出口流量差增大和风险分上升；
 5. 进入“告警中心”，点击“转工单”；
 6. 在“运维工单”中依次点击“开始处理”和“完成工单”；
-7. 打开“分析报告”，查看告警闭环率、工单完成率和运行评分。
+7. 打开“分析报告”，查看告警闭环率、工单完成率和运行评分；
+8. 打开“数据中心”，查看新增告警、工单和审计日志是否已写入 SQLite。
 
-> “注入泄漏演示”仅修改内存中的模拟数据，重启服务即可复位。
+> 泄漏注入过程属于教学模拟，但产生的遥测、告警与工单会持久化到 SQLite 数据库。
 
 ## 系统架构
 
@@ -78,6 +89,7 @@ flowchart LR
     subgraph Platform["平台层"]
         API["HTTP 数据服务"]
         EVENT["告警与设备管理"]
+        DB[("SQLite 数据库")]
     end
     subgraph App["应用层"]
         DASH["可视化监控大屏"]
@@ -87,6 +99,7 @@ flowchart LR
     GW --> ALG
     ALG -->|风险结果| API
     API <--> EVENT
+    API <--> DB
     API --> DASH --> USER
     USER -->|告警确认与工单处置| EVENT
 ```
@@ -120,8 +133,10 @@ flowchart LR
 PipeGuard/
 ├─ pipeguard/
 │  ├─ risk.py          # 多源融合风险算法
+│  ├─ database.py      # SQLite 建表、持久化与审计
 │  ├─ store.py         # 实时数据、告警、工单与模拟器
 │  └─ server.py        # HTTP API 与静态资源服务
+├─ data/                # 运行时 SQLite 数据目录
 ├─ web/
 │  ├─ index.html       # 监控平台页面
 │  ├─ styles.css       # 响应式视觉样式
@@ -139,7 +154,20 @@ PipeGuard/
 python -m unittest discover -s tests -v
 ```
 
-当前共 16 项自动化测试，覆盖正常、警告、严重风险识别，相关信号增强、接口健康检查、管线查询、404 处理、泄漏注入、告警确认、工单状态机、运营统计、CSV 导出和 Python 3.6 兼容性。
+当前共 20 项自动化测试，覆盖正常、警告、严重风险识别，相关信号增强、接口健康检查、管线查询、404 处理、泄漏注入、告警确认、工单状态机、SQLite 重启持久化、审计日志、运营统计、双 CSV 导出和 Python 3.6 兼容性。
+
+## 数据库设计
+
+项目使用 Python 3.6 标准库自带的 SQLite，无需安装数据库服务或第三方驱动：
+
+| 数据表 | 用途 |
+| --- | --- |
+| `telemetry` | 保存压力、流量、气体、振动和风险计算结果 |
+| `alerts` | 保存风险告警及确认、关闭状态 |
+| `work_orders` | 保存负责人、优先级和工单流转状态 |
+| `audit_logs` | 保存关键业务操作，支持追溯 |
+
+遥测数据按管线自动保留最近 720 条，避免演示服务器长期运行导致数据库无限增长。Docker 部署时建议把 `/app/data` 挂载为持久卷。
 
 ## 文档
 

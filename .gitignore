@@ -10,3 +10,6 @@ venv/
 coverage.xml
 .coverage
 htmlcov/
+data/*.db
+data/*.db-shm
+data/*.db-wal

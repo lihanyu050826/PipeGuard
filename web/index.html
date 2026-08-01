@@ -40,6 +40,9 @@
         <button class="nav-item" data-target="analytics">
           <span class="nav-icon">⌁</span><span>分析报告</span>
         </button>
+        <button class="nav-item" data-target="database">
+          <span class="nav-icon">◉</span><span>数据中心</span>
+        </button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -294,6 +297,45 @@
           <span class="ai-chip">AI</span>
           <div><h3>运维建议</h3><p id="operation-advice">系统正在根据实时风险与处置进度生成建议。</p></div>
         </article>
+      </section>
+
+      <section id="database-view" class="view">
+        <div class="section-intro">
+          <div><span class="section-kicker">DATA PERSISTENCE CENTER</span><h2>数据中心</h2><p>查看 SQLite 持久化状态、数据表规模和系统操作审计。</p></div>
+          <div class="export-group">
+            <a class="export-button secondary" href="/api/export/work-orders.csv" download>导出工单 CSV <span>↓</span></a>
+            <a class="export-button" href="/api/export/alerts.csv" download>导出告警 CSV <span>↓</span></a>
+          </div>
+        </div>
+        <article class="panel database-hero">
+          <div class="database-orb"><span>DB</span><i></i></div>
+          <div class="database-copy">
+            <span class="database-status"><i></i>数据库连接正常</span>
+            <h2><span id="db-engine">SQLite</span> 持久化引擎</h2>
+            <p>告警、工单、历史遥测和审计日志均写入数据库，服务重启后仍可恢复。</p>
+          </div>
+          <div class="database-meta">
+            <div><span>SQLite 版本</span><b id="db-version">—</b></div>
+            <div><span>数据库位置</span><b id="db-location">—</b></div>
+            <div><span>最后写入</span><b id="db-last-write">—</b></div>
+          </div>
+        </article>
+        <div class="database-summary">
+          <article class="panel"><span>遥测记录</span><strong id="db-telemetry-count">0</strong><small>自动保留最近采样</small></article>
+          <article class="panel"><span>告警记录</span><strong id="db-alert-count">0</strong><small>风险事件持久化</small></article>
+          <article class="panel"><span>工单记录</span><strong id="db-work-count">0</strong><small>处置流程可追踪</small></article>
+          <article class="panel"><span>审计记录</span><strong id="db-audit-count">0</strong><small>关键操作有留痕</small></article>
+        </div>
+        <div class="database-grid">
+          <article class="panel database-tables-panel">
+            <div class="panel-heading"><div><span class="section-kicker">SCHEMA OVERVIEW</span><h3>数据表结构</h3></div><span id="db-size" class="analytics-tag">—</span></div>
+            <div id="database-table-list" class="database-table-list"></div>
+          </article>
+          <article class="panel audit-panel">
+            <div class="panel-heading"><div><span class="section-kicker">AUDIT TRAIL</span><h3>最近操作审计</h3></div><span class="analytics-tag">实时留痕</span></div>
+            <div id="audit-log-list" class="audit-log-list"></div>
+          </article>
+        </div>
       </section>
     </main>
   </div>

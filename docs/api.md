@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.1.1"}
+{"status":"ok","service":"pipeguard-api","version":"1.2.0","database":"connected"}
 ```
 
 ## 管网总览
@@ -121,6 +121,30 @@ GET /api/export/alerts.csv
 ```
 
 返回带 UTF-8 BOM 的 CSV 文件，可直接使用 Excel 打开并用于课程报告留档。
+
+## 数据库状态
+
+```http
+GET /api/database
+```
+
+返回 SQLite 版本、数据库位置、文件大小、保留策略，以及 `telemetry`、`alerts`、`work_orders`、`audit_logs` 四张表的记录数。
+
+## 操作审计日志
+
+```http
+GET /api/audit-logs
+```
+
+返回最近 50 条关键操作，包括泄漏场景注入、告警生成、告警确认、工单创建和状态更新。
+
+## 导出工单
+
+```http
+GET /api/export/work-orders.csv
+```
+
+返回带 UTF-8 BOM 的工单 CSV 文件，包含负责人、优先级、状态和时限信息。
 
 ## 注入泄漏演示
 

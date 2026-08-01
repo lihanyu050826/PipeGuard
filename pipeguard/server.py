@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from .store import MonitoringStore, Simulator
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
+DEFAULT_DATABASE = Path(__file__).resolve().parent.parent / "data" / "pipeguard.db"
 
 
 class PipeGuardServer(ThreadingMixIn, HTTPServer):
@@ -27,6 +28,10 @@ class PipeGuardServer(ThreadingMixIn, HTTPServer):
     def __init__(self, address: Tuple[str, int], store: MonitoringStore):
         super().__init__(address, RequestHandler)
         self.store = store
+
+    def server_close(self) -> None:
+        super().server_close()
+        self.store.close()
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -92,6 +97,37 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _work_order_csv(
+        self, rows: List[Dict[str, object]], filename: str
+    ) -> None:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "工单编号", "工单标题", "关联告警", "管线编号", "管线名称",
+                "优先级", "状态", "负责人", "创建时间", "要求完成时间",
+            ]
+        )
+        for order in rows:
+            writer.writerow(
+                [
+                    order["id"], order["title"], order["alert_id"],
+                    order["pipeline_id"], order["pipeline_name"],
+                    order["priority"], order["status"], order["assignee"],
+                    order["created_at"], order["due_at"],
+                ]
+            )
+        body = ("\ufeff" + output.getvalue()).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -103,7 +139,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         pipeline_match = re.fullmatch(r"/api/pipelines/([A-Za-z0-9-]+)", path)
         if path == "/api/health":
-            self._json({"status": "ok", "service": "pipeguard-api", "version": "1.1.1"})
+            self._json(
+                {
+                    "status": "ok",
+                    "service": "pipeguard-api",
+                    "version": "1.2.0",
+                    "database": "connected",
+                }
+            )
         elif path == "/api/overview":
             self._json(self.server.store.overview())
         elif path == "/api/pipelines":
@@ -114,8 +157,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json({"items": self.server.store.work_orders()})
         elif path == "/api/analytics":
             self._json(self.server.store.analytics())
+        elif path == "/api/database":
+            self._json(self.server.store.database_summary())
+        elif path == "/api/audit-logs":
+            self._json({"items": self.server.store.audit_logs()})
         elif path == "/api/export/alerts.csv":
             self._csv(self.server.store.alerts(), "pipeguard-alerts.csv")
+        elif path == "/api/export/work-orders.csv":
+            self._work_order_csv(
+                self.server.store.work_orders(), "pipeguard-work-orders.csv"
+            )
         elif pipeline_match:
             pipeline = self.server.store.pipeline(pipeline_match.group(1))
             if pipeline:
@@ -212,9 +263,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="运行 PipeGuard 监测平台")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=8000, help="监听端口")
+    parser.add_argument(
+        "--database",
+        default=str(DEFAULT_DATABASE),
+        help="SQLite 数据库文件路径",
+    )
     args = parser.parse_args()
 
-    store = MonitoringStore()
+    store = MonitoringStore(database_path=args.database)
     simulator = Simulator(store)
     server = create_server(args.host, args.port, store=store)
     simulator.start()
@@ -225,6 +281,7 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, shutdown_handler)
     print(f"PipeGuard 已启动：http://{args.host}:{args.port}")
+    print(f"SQLite 数据库：{args.database}")
     print("按 Ctrl+C 停止服务")
     try:
         server.serve_forever()
