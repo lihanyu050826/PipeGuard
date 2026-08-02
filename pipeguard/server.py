@@ -128,6 +128,40 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _device_csv(
+        self, rows: List[Dict[str, object]], filename: str
+    ) -> None:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "设备编号", "设备名称", "类型", "关联管线", "状态",
+                "实时读数", "单位", "电量", "信号质量", "通信协议",
+                "最后在线", "上次校准", "下次维护",
+            ]
+        )
+        for device in rows:
+            writer.writerow(
+                [
+                    device["id"], device["name"], device["type_name"],
+                    device["pipeline_name"], device["status"],
+                    device.get("reading", ""), device["unit"],
+                    device["battery"], device["signal"], device["protocol"],
+                    device["last_seen"], device["calibrated_at"],
+                    device["maintenance_due"],
+                ]
+            )
+        body = ("\ufeff" + output.getvalue()).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -143,7 +177,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "service": "pipeguard-api",
-                    "version": "1.2.0",
+                    "version": "1.3.0",
                     "database": "connected",
                 }
             )
@@ -155,6 +189,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json({"items": self.server.store.alerts()})
         elif path == "/api/work-orders":
             self._json({"items": self.server.store.work_orders()})
+        elif path == "/api/devices":
+            self._json({"items": self.server.store.devices()})
         elif path == "/api/analytics":
             self._json(self.server.store.analytics())
         elif path == "/api/database":
@@ -166,6 +202,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/export/work-orders.csv":
             self._work_order_csv(
                 self.server.store.work_orders(), "pipeguard-work-orders.csv"
+            )
+        elif path == "/api/export/devices.csv":
+            self._device_csv(
+                self.server.store.devices(), "pipeguard-devices.csv"
             )
         elif pipeline_match:
             pipeline = self.server.store.pipeline(pipeline_match.group(1))
@@ -183,6 +223,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         alert_match = re.fullmatch(r"/api/alerts/([A-Za-z0-9-]+)/ack", path)
         work_order_match = re.fullmatch(
             r"/api/work-orders/([A-Za-z0-9-]+)/status", path
+        )
+        device_calibrate_match = re.fullmatch(
+            r"/api/devices/([A-Za-z0-9-]+)/calibrate", path
+        )
+        device_status_match = re.fullmatch(
+            r"/api/devices/([A-Za-z0-9-]+)/status", path
         )
         if path == "/api/simulate/leak":
             pipe_id = self._body().get("pipeline_id", "PL-001")
@@ -228,6 +274,25 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": error}, HTTPStatus.CONFLICT)
             else:
                 self._json(work_order)
+        elif device_calibrate_match:
+            device = self.server.store.calibrate_device(
+                device_calibrate_match.group(1)
+            )
+            if device:
+                self._json(device)
+            else:
+                self._json({"error": "device_not_found"}, HTTPStatus.NOT_FOUND)
+        elif device_status_match:
+            device, error = self.server.store.update_device_status(
+                device_status_match.group(1),
+                str(self._body().get("status", "")),
+            )
+            if error == "device_not_found":
+                self._json({"error": error}, HTTPStatus.NOT_FOUND)
+            elif error:
+                self._json({"error": error}, HTTPStatus.BAD_REQUEST)
+            else:
+                self._json(device)
         else:
             self._json({"error": "endpoint_not_found"}, HTTPStatus.NOT_FOUND)
 

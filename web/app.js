@@ -3,12 +3,16 @@ const state = {
   pipelines: [],
   alerts: [],
   workOrders: [],
+  devices: [],
   analytics: null,
   database: null,
   auditLogs: [],
   selectedPipeline: "PL-001",
   alertFilter: "all",
   workFilter: "all",
+  deviceStatusFilter: "all",
+  deviceTypeFilter: "all",
+  deviceSearch: "",
   refreshTimer: null,
 };
 
@@ -41,6 +45,12 @@ function formatDateTime(value) {
   }).format(new Date(value));
 }
 
+function formatDate(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(value));
+}
+
 function notify(message) {
   const toast = $("#toast");
   $("p", toast).textContent = message;
@@ -51,15 +61,16 @@ function notify(message) {
 
 async function refreshAll({ quiet = false } = {}) {
   try {
-    const [overview, pipelines, alerts, workOrders, analytics, database, auditLogs] = await Promise.all([
+    const [overview, pipelines, alerts, workOrders, devices, analytics, database, auditLogs] = await Promise.all([
       api("/api/overview"), api("/api/pipelines"), api("/api/alerts"),
-      api("/api/work-orders"), api("/api/analytics"), api("/api/database"),
-      api("/api/audit-logs"),
+      api("/api/work-orders"), api("/api/devices"), api("/api/analytics"),
+      api("/api/database"), api("/api/audit-logs"),
     ]);
     state.overview = overview;
     state.pipelines = pipelines.items;
     state.alerts = alerts.items;
     state.workOrders = workOrders.items;
+    state.devices = devices.items;
     state.analytics = analytics;
     state.database = database;
     state.auditLogs = auditLogs.items;
@@ -95,6 +106,9 @@ function renderMetrics() {
   $("#nav-alert-count").textContent = metrics.open_alerts;
   $("#nav-work-count").textContent = state.workOrders.filter((item) => item.status !== "completed").length;
   $("#last-updated").textContent = `${formatTime(updatedAt)} 更新`;
+  const offlineDevices = metrics.device_total - metrics.online_devices;
+  $("#health-device-value").textContent = offlineDevices ? `${offlineDevices} 台离线` : "正常";
+  $("#health-device-value").classList.toggle("health-warning", offlineDevices > 0);
 
   const mostRisky = [...state.pipelines].sort(
     (a, b) => b.telemetry.risk.score - a.telemetry.risk.score,
@@ -350,10 +364,16 @@ async function updateWorkOrder(id, status) {
 
 function renderAnalytics() {
   if (!state.analytics) return;
-  const { risk, alerts, work_orders: workOrders, generated_at: generatedAt } = state.analytics;
+  const {
+    risk, alerts, work_orders: workOrders, devices: deviceStats,
+    generated_at: generatedAt,
+  } = state.analytics;
   const operationScore = Math.max(
     0,
-    Math.round(100 - risk.average * 0.65 - (100 - alerts.closure_rate) * 0.12),
+    Math.round(
+      100 - risk.average * 0.65 - (100 - alerts.closure_rate) * 0.12
+      - deviceStats.offline * 4,
+    ),
   );
   $("#operation-score").textContent = operationScore;
   $("#analytics-time").textContent = `${formatDateTime(generatedAt)} 生成 · 实时数据`;
@@ -372,7 +392,13 @@ function renderAnalytics() {
   $("#analytics-alert-total").textContent = alerts.total;
   $("#analytics-work-total").textContent = workOrders.total;
   $("#analytics-work-rate").textContent = `${workOrders.completion_rate}%`;
-  $("#operation-advice").textContent = risk.maximum >= 65
+  $("#analytics-device-rate").textContent = `在线率 ${deviceStats.online_rate}%`;
+  $("#analytics-device-online").textContent = `${deviceStats.online} / ${deviceStats.total}`;
+  $("#analytics-device-offline").textContent = deviceStats.offline;
+  $("#analytics-device-due").textContent = deviceStats.calibration_due;
+  $("#operation-advice").textContent = deviceStats.offline > 0
+    ? `当前有 ${deviceStats.offline} 台设备离线，建议优先检查设备供电、现场总线和边缘网关连接。`
+    : risk.maximum >= 65
     ? "检测到高风险管线，建议立即创建紧急工单，复核压力、流量与现场气体信号，并按预案隔离相关管段。"
     : workOrders.by_status.pending > 0
       ? `当前有 ${workOrders.by_status.pending} 条工单等待处理，建议完成责任分派并在要求时限内反馈现场结果。`
@@ -399,6 +425,7 @@ function renderDatabase() {
   $("#db-telemetry-count").textContent = tableMap.telemetry?.rows || 0;
   $("#db-alert-count").textContent = tableMap.alerts?.rows || 0;
   $("#db-work-count").textContent = tableMap.work_orders?.rows || 0;
+  $("#db-device-count").textContent = tableMap.devices?.rows || 0;
   $("#db-audit-count").textContent = tableMap.audit_logs?.rows || 0;
   $("#database-table-list").innerHTML = database.tables.map((table) => `
     <div class="database-table-row">
@@ -414,6 +441,9 @@ function renderDatabase() {
     alert_acknowledged: "人工确认告警",
     work_order_created: "创建运维工单",
     work_order_status_changed: "更新工单状态",
+    devices_registered: "设备资产入库",
+    device_calibrated: "设备远程校准",
+    device_status_changed: "设备状态变更",
   };
   $("#audit-log-list").innerHTML = state.auditLogs.length
     ? state.auditLogs.slice(0, 8).map((log) => `
@@ -425,19 +455,82 @@ function renderDatabase() {
 }
 
 function renderDevices() {
-  const types = [
-    ["压力变送器", "PT", "0–10 MPa", "±0.25% FS"],
-    ["超声波流量计", "FT", "0–200 m³/h", "±0.5%"],
-    ["可燃气体探测器", "GT", "0–1000 ppm", "±3% FS"],
-    ["振动传感器", "VT", "0–20 mm/s", "±0.1 mm/s"],
-  ];
-  const devices = state.pipelines.flatMap((pipeline) => types.map((type, i) => ({
-    name: `${type[0]} · ${pipeline.id}`, code: `${type[1]}-${pipeline.id.slice(-3)}`, pipe: pipeline.name,
-    range: type[2], accuracy: type[3], latency: 18 + i * 4,
-  })));
-  $("#device-grid").innerHTML = devices.map((d) => `
-    <article class="panel device-card"><div class="device-top"><span class="device-symbol">◫</span><span class="online-tag">● 在线</span></div>
-    <h3>${d.name}</h3><p>${d.code} · ${d.pipe}</p><div class="device-data"><div><span>量程</span><b>${d.range}</b></div><div><span>精度</span><b>${d.accuracy}</b></div><div><span>上报延迟</span><b>${d.latency} ms</b></div><div><span>协议</span><b>MQTT</b></div></div></article>`).join("");
+  const total = state.devices.length;
+  const online = state.devices.filter((device) => device.status === "online").length;
+  const averageSignal = total
+    ? Math.round(state.devices.reduce((sum, device) => sum + device.signal, 0) / total)
+    : 0;
+  $("#device-total").textContent = total;
+  $("#device-online").textContent = online;
+  $("#device-offline").textContent = total - online;
+  $("#device-online-rate").textContent = `在线率 ${Math.round(online / Math.max(1, total) * 100)}%`;
+  $("#device-signal").textContent = `${averageSignal}%`;
+
+  const keyword = state.deviceSearch.trim().toLowerCase();
+  const filtered = state.devices.filter((device) => {
+    const matchesStatus = state.deviceStatusFilter === "all"
+      || device.status === state.deviceStatusFilter;
+    const matchesType = state.deviceTypeFilter === "all"
+      || device.type_code === state.deviceTypeFilter;
+    const searchable = `${device.id} ${device.name} ${device.pipeline_name}`.toLowerCase();
+    return matchesStatus && matchesType && (!keyword || searchable.includes(keyword));
+  });
+  $("#device-result-count").textContent = `${filtered.length} 台设备`;
+  $("#device-grid").innerHTML = filtered.length ? filtered.map((device) => {
+    const reading = device.reading === null || device.reading === undefined
+      ? "—" : device.reading;
+    const nextStatus = device.status === "online" ? "offline" : "online";
+    return `
+      <article class="panel device-card ${device.status}">
+        <div class="device-card-head">
+          <div class="device-identity"><span class="device-symbol">${device.type_code}</span><div><span>${device.id}</span><h3>${device.type_name}</h3></div></div>
+          <span class="online-tag ${device.status}"><i></i>${device.status === "online" ? "在线" : "离线"}</span>
+        </div>
+        <div class="device-reading ${device.status}"><span>实时读数</span><strong>${reading}</strong><small>${device.unit}</small><em>${device.pipeline_name}</em></div>
+        <div class="device-data">
+          <div><span>量程 / 精度</span><b>${device.range_text}</b><small>${device.accuracy}</small></div>
+          <div><span>通信协议</span><b>${device.protocol}</b><small>最后在线 ${formatTime(device.last_seen)}</small></div>
+          <div><span>供电状态</span><b>${device.battery}%</b><div class="mini-progress"><i style="width:${device.battery}%"></i></div></div>
+          <div><span>信号质量</span><b>${device.signal}%</b><div class="mini-progress signal"><i style="width:${device.signal}%"></i></div></div>
+        </div>
+        <div class="calibration-row"><span>上次校准 ${formatDate(device.calibrated_at)}</span><b class="${device.calibration_due ? "due" : ""}">${device.calibration_due ? "已到期" : `下次 ${formatDate(device.maintenance_due)}`}</b></div>
+        <div class="device-actions">
+          <button data-device-calibrate="${device.id}" ${device.status === "offline" ? "disabled" : ""}>⌖ 远程校准</button>
+          <button class="${nextStatus === "offline" ? "offline" : "recover"}" data-device-toggle="${device.id}" data-device-next="${nextStatus}">${nextStatus === "offline" ? "模拟离线" : "恢复在线"}</button>
+        </div>
+      </article>`;
+  }).join("") : `<article class="panel empty-state">没有找到符合筛选条件的设备</article>`;
+
+  $$('[data-device-calibrate]').forEach((button) => button.addEventListener("click", () => {
+    calibrateDevice(button.dataset.deviceCalibrate);
+  }));
+  $$('[data-device-toggle]').forEach((button) => button.addEventListener("click", () => {
+    updateDeviceStatus(button.dataset.deviceToggle, button.dataset.deviceNext);
+  }));
+}
+
+async function calibrateDevice(id) {
+  try {
+    await api(`/api/devices/${id}/calibrate`, { method: "POST", body: "{}" });
+    notify(`${id} 远程校准完成，下次周期已更新`);
+    await refreshAll({ quiet: true });
+  } catch {
+    notify("设备校准失败，请检查设备连接");
+  }
+}
+
+async function updateDeviceStatus(id, status) {
+  const action = status === "offline" ? "模拟设备离线" : "恢复设备在线";
+  if (!confirm(`确认${action}“${id}”？`)) return;
+  try {
+    await api(`/api/devices/${id}/status`, {
+      method: "POST", body: JSON.stringify({ status }),
+    });
+    notify(`${id} 已${status === "offline" ? "离线，系统已生成告警" : "恢复在线"}`);
+    await refreshAll({ quiet: true });
+  } catch {
+    notify("设备状态更新失败");
+  }
 }
 
 function navigate(target) {
@@ -485,6 +578,19 @@ $$("[data-work-filter]").forEach((button) => button.addEventListener("click", ()
   $$("[data-work-filter]").forEach((item) => item.classList.toggle("active", item === button));
   renderWorkOrders();
 }));
+$$("[data-device-status]").forEach((button) => button.addEventListener("click", () => {
+  state.deviceStatusFilter = button.dataset.deviceStatus;
+  $$("[data-device-status]").forEach((item) => item.classList.toggle("active", item === button));
+  renderDevices();
+}));
+$("#device-type-filter").addEventListener("change", (event) => {
+  state.deviceTypeFilter = event.target.value;
+  renderDevices();
+});
+$("#device-search").addEventListener("input", (event) => {
+  state.deviceSearch = event.target.value;
+  renderDevices();
+});
 window.addEventListener("resize", () => loadPipelineDetail(state.selectedPipeline));
 
 refreshAll({ quiet: true });

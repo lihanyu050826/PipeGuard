@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 def utc_now() -> str:
@@ -111,6 +111,29 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_audit_created_at
                     ON audit_logs(id DESC);
+
+                CREATE TABLE IF NOT EXISTS devices (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type_code TEXT NOT NULL,
+                    type_name TEXT NOT NULL,
+                    pipeline_id TEXT NOT NULL,
+                    pipeline_name TEXT NOT NULL,
+                    metric_key TEXT NOT NULL,
+                    unit TEXT NOT NULL,
+                    range_text TEXT NOT NULL,
+                    accuracy TEXT NOT NULL,
+                    protocol TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    battery INTEGER NOT NULL,
+                    signal INTEGER NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    calibrated_at TEXT NOT NULL,
+                    maintenance_due TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_devices_pipeline_status
+                    ON devices(pipeline_id, status);
                 """
             )
             self._connection.execute(
@@ -122,16 +145,15 @@ class Database:
         self,
         initial_alerts: List[Dict[str, Any]],
         initial_work_orders: List[Dict[str, Any]],
+        initial_devices: List[Dict[str, Any]],
     ) -> None:
-        """Seed a newly-created database without overwriting existing data."""
+        """Seed new tables without overwriting existing business data."""
 
-        with self._lock:
+        with self._lock, self._connection:
             alert_count = self._connection.execute(
                 "SELECT COUNT(*) FROM alerts"
             ).fetchone()[0]
-            if alert_count:
-                return
-            with self._connection:
+            if not alert_count:
                 for alert in initial_alerts:
                     self._insert_alert(alert)
                 for order in initial_work_orders:
@@ -141,6 +163,18 @@ class Database:
                     "system",
                     "PipeGuard",
                     "SQLite 数据库初始化完成，已写入演示告警与工单。",
+                )
+            device_count = self._connection.execute(
+                "SELECT COUNT(*) FROM devices"
+            ).fetchone()[0]
+            if not device_count:
+                for device in initial_devices:
+                    self._insert_device(device)
+                self._insert_audit(
+                    "devices_registered",
+                    "device",
+                    "all",
+                    "12 台工业传感设备已完成资产入库。",
                 )
 
     def _insert_alert(self, alert: Dict[str, Any]) -> None:
@@ -175,6 +209,26 @@ class Database:
             ),
         )
 
+    def _insert_device(self, device: Dict[str, Any]) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO devices(
+                id, name, type_code, type_name, pipeline_id, pipeline_name,
+                metric_key, unit, range_text, accuracy, protocol, status,
+                battery, signal, last_seen, calibrated_at, maintenance_due
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                device["id"], device["name"], device["type_code"],
+                device["type_name"], device["pipeline_id"],
+                device["pipeline_name"], device["metric_key"], device["unit"],
+                device["range_text"], device["accuracy"], device["protocol"],
+                device["status"], device["battery"], device["signal"],
+                device["last_seen"], device["calibrated_at"],
+                device["maintenance_due"],
+            ),
+        )
+
     def load_alerts(self) -> List[Dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(
@@ -186,6 +240,13 @@ class Database:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT * FROM work_orders ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def load_devices(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM devices ORDER BY pipeline_id, type_code"
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -224,6 +285,29 @@ class Database:
             )
             if cursor.rowcount == 0:
                 self._insert_work_order(order)
+
+    def save_device(self, device: Dict[str, Any]) -> None:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE devices SET name=?, type_code=?, type_name=?,
+                    pipeline_id=?, pipeline_name=?, metric_key=?, unit=?,
+                    range_text=?, accuracy=?, protocol=?, status=?, battery=?,
+                    signal=?, last_seen=?, calibrated_at=?, maintenance_due=?
+                WHERE id=?
+                """,
+                (
+                    device["name"], device["type_code"], device["type_name"],
+                    device["pipeline_id"], device["pipeline_name"],
+                    device["metric_key"], device["unit"], device["range_text"],
+                    device["accuracy"], device["protocol"], device["status"],
+                    device["battery"], device["signal"], device["last_seen"],
+                    device["calibrated_at"], device["maintenance_due"],
+                    device["id"],
+                ),
+            )
+            if cursor.rowcount == 0:
+                self._insert_device(device)
 
     def save_telemetry(self, pipeline_id: str, sample: Dict[str, Any]) -> None:
         risk = sample["risk"]
@@ -324,11 +408,14 @@ class Database:
             "telemetry": "历史遥测采样",
             "alerts": "风险告警事件",
             "work_orders": "运维处置工单",
+            "devices": "工业设备资产",
             "audit_logs": "系统操作审计",
         }
         tables = []
         with self._lock:
-            for name in ("telemetry", "alerts", "work_orders", "audit_logs"):
+            for name in (
+                "telemetry", "alerts", "work_orders", "devices", "audit_logs"
+            ):
                 count = self._connection.execute(
                     "SELECT COUNT(*) FROM " + name
                 ).fetchone()[0]

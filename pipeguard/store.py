@@ -49,6 +49,45 @@ PIPELINES = [  # type: List[Dict[str, Any]]
     },
 ]
 
+DEVICE_TYPES = [  # type: List[Dict[str, str]]
+    {
+        "type_code": "PT",
+        "type_name": "压力变送器",
+        "metric_key": "pressure",
+        "unit": "MPa",
+        "range_text": "0–10 MPa",
+        "accuracy": "±0.25% FS",
+        "protocol": "HART",
+    },
+    {
+        "type_code": "FT",
+        "type_name": "超声波流量计",
+        "metric_key": "outlet_flow",
+        "unit": "m³/h",
+        "range_text": "0–200 m³/h",
+        "accuracy": "±0.5%",
+        "protocol": "Modbus RTU",
+    },
+    {
+        "type_code": "GT",
+        "type_name": "可燃气体探测器",
+        "metric_key": "gas_ppm",
+        "unit": "ppm",
+        "range_text": "0–1000 ppm",
+        "accuracy": "±3% FS",
+        "protocol": "MQTT",
+    },
+    {
+        "type_code": "VT",
+        "type_name": "振动传感器",
+        "metric_key": "vibration",
+        "unit": "mm/s",
+        "range_text": "0–20 mm/s",
+        "accuracy": "±0.1 mm/s",
+        "protocol": "MQTT",
+    },
+]
+
 
 class MonitoringStore:
     """Owns live snapshots and coordinates persistent business state."""
@@ -125,9 +164,45 @@ class MonitoringStore:
         ]
         initial_alerts[0]["work_order_id"] = "WO-0002"
         initial_alerts[1]["work_order_id"] = "WO-0001"
-        self._database.initialize(initial_alerts, initial_work_orders)
+        registered_at = datetime.now(timezone.utc)
+        initial_devices = []  # type: List[Dict[str, Any]]
+        for pipeline_index, pipeline in enumerate(PIPELINES):
+            for type_index, device_type in enumerate(DEVICE_TYPES):
+                sequence = pipeline_index * len(DEVICE_TYPES) + type_index + 1
+                calibrated_at = registered_at - timedelta(days=24 + sequence * 3)
+                initial_devices.append(
+                    {
+                        "id": "{}-{:03d}".format(
+                            device_type["type_code"], pipeline_index + 1
+                        ),
+                        "name": device_type["type_name"],
+                        "type_code": device_type["type_code"],
+                        "type_name": device_type["type_name"],
+                        "pipeline_id": pipeline["id"],
+                        "pipeline_name": pipeline["name"],
+                        "metric_key": device_type["metric_key"],
+                        "unit": device_type["unit"],
+                        "range_text": device_type["range_text"],
+                        "accuracy": device_type["accuracy"],
+                        "protocol": device_type["protocol"],
+                        "status": "online",
+                        "battery": max(72, 98 - sequence * 2),
+                        "signal": max(68, 96 - sequence),
+                        "last_seen": registered_at.isoformat(timespec="seconds"),
+                        "calibrated_at": calibrated_at.isoformat(
+                            timespec="seconds"
+                        ),
+                        "maintenance_due": (
+                            calibrated_at + timedelta(days=180)
+                        ).isoformat(timespec="seconds"),
+                    }
+                )
+        self._database.initialize(
+            initial_alerts, initial_work_orders, initial_devices
+        )
         self._alerts = self._database.load_alerts()
         self._work_orders = self._database.load_work_orders()
+        self._devices = self._database.load_devices()
         self._alert_seq = self._maximum_sequence(self._alerts)
         self._work_order_seq = self._maximum_sequence(self._work_orders)
 
@@ -258,7 +333,7 @@ class MonitoringStore:
             open_alerts = sum(
                 alert["status"] == "open" for alert in self._alerts
             )
-            online = len(pipelines) * 4
+            online = sum(device["status"] == "online" for device in self._devices)
             return {
                 "system_name": "PipeGuard",
                 "updated_at": utc_now(),
@@ -266,7 +341,7 @@ class MonitoringStore:
                     "pipeline_count": len(pipelines),
                     "monitored_length": round(sum(p["length"] for p in pipelines), 1),
                     "online_devices": online,
-                    "device_total": online,
+                    "device_total": len(self._devices),
                     "open_alerts": open_alerts,
                     "availability": 99.8,
                 },
@@ -306,6 +381,107 @@ class MonitoringStore:
     def work_orders(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(work_order) for work_order in self._work_orders]
+
+    def devices(self) -> List[Dict[str, Any]]:
+        """Return persistent device assets enriched with live readings."""
+
+        with self._lock:
+            result = []
+            now = utc_now()
+            for device in self._devices:
+                item = dict(device)
+                snapshot = self._snapshots.get(device["pipeline_id"], {})
+                if device["status"] == "online":
+                    item["reading"] = snapshot.get(device["metric_key"])
+                    item["last_seen"] = snapshot.get("timestamp", device["last_seen"])
+                else:
+                    item["reading"] = None
+                item["calibration_due"] = device["maintenance_due"] <= now
+                result.append(item)
+            return result
+
+    def calibrate_device(self, device_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            device = next(
+                (item for item in self._devices if item["id"] == device_id), None
+            )
+            if not device:
+                return None
+            now = datetime.now(timezone.utc)
+            device["calibrated_at"] = now.isoformat(timespec="seconds")
+            device["maintenance_due"] = (
+                now + timedelta(days=180)
+            ).isoformat(timespec="seconds")
+            device["last_seen"] = now.isoformat(timespec="seconds")
+            self._database.save_device(device)
+            self._database.add_audit(
+                "device_calibrated",
+                "device",
+                device_id,
+                "{} {} 已完成远程零点校准。".format(
+                    device["pipeline_name"], device["type_name"]
+                ),
+            )
+            return next(
+                item for item in self.devices() if item["id"] == device_id
+            )
+
+    def update_device_status(
+        self, device_id: str, status: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        if status not in ("online", "offline"):
+            return None, "invalid_status"
+        with self._lock:
+            device = next(
+                (item for item in self._devices if item["id"] == device_id), None
+            )
+            if not device:
+                return None, "device_not_found"
+            if device["status"] == status:
+                return next(
+                    item for item in self.devices() if item["id"] == device_id
+                ), None
+
+            device["status"] = status
+            device["last_seen"] = utc_now()
+            self._database.save_device(device)
+            alert_title = "设备 {} 通信中断".format(device_id)
+            if status == "offline":
+                self._alert_seq += 1
+                alert = {
+                    "id": "ALT-{:04d}".format(self._alert_seq),
+                    "pipeline_id": device["pipeline_id"],
+                    "pipeline_name": device["pipeline_name"],
+                    "level": "warning",
+                    "title": alert_title,
+                    "description": "{} 已离线，请检查供电、通信链路与边缘网关。".format(
+                        device["type_name"]
+                    ),
+                    "status": "open",
+                    "created_at": utc_now(),
+                    "acknowledged_at": None,
+                }
+                self._alerts.insert(0, alert)
+                self._database.save_alert(alert)
+            else:
+                for alert in self._alerts:
+                    if alert["title"] == alert_title and alert["status"] != "resolved":
+                        alert["status"] = "resolved"
+                        alert["acknowledged_at"] = alert.get(
+                            "acknowledged_at"
+                        ) or utc_now()
+                        self._database.save_alert(alert)
+            self._database.add_audit(
+                "device_status_changed",
+                "device",
+                device_id,
+                "{} 已{}。".format(
+                    device["type_name"], "恢复在线" if status == "online" else "模拟离线"
+                ),
+            )
+            return next(
+                item for item in self.devices() if item["id"] == device_id
+            ), None
 
     def create_work_order(
         self,
@@ -431,6 +607,12 @@ class MonitoringStore:
                 for level in ("warning", "critical")
             }
             completed = status_counts["completed"]
+            online_devices = sum(
+                device["status"] == "online" for device in self._devices
+            )
+            calibration_due = sum(
+                device["maintenance_due"] <= utc_now() for device in self._devices
+            )
             return {
                 "generated_at": utc_now(),
                 "risk": {
@@ -454,6 +636,15 @@ class MonitoringStore:
                     "completion_rate": round(
                         completed / max(1, len(self._work_orders)) * 100, 1
                     ),
+                },
+                "devices": {
+                    "total": len(self._devices),
+                    "online": online_devices,
+                    "offline": len(self._devices) - online_devices,
+                    "online_rate": round(
+                        online_devices / max(1, len(self._devices)) * 100, 1
+                    ),
+                    "calibration_due": calibration_due,
                 },
             }
 

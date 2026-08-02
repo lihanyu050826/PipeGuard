@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.2.0","database":"connected"}
+{"status":"ok","service":"pipeguard-api","version":"1.3.0","database":"connected"}
 ```
 
 ## 管网总览
@@ -50,6 +50,36 @@ GET /api/pipelines/PL-001
   }
 }
 ```
+
+## 设备资产管理
+
+查询 12 台传感设备台账与实时读数：
+
+```http
+GET /api/devices
+```
+
+返回设备类型、管线归属、量程、精度、协议、电量、信号、校准周期与在线状态。
+
+执行远程校准：
+
+```http
+POST /api/devices/PT-001/calibrate
+Content-Type: application/json
+
+{}
+```
+
+更新设备状态：
+
+```http
+POST /api/devices/PT-001/status
+Content-Type: application/json
+
+{"status":"offline"}
+```
+
+状态可为 `online` 或 `offline`。设备离线时系统自动生成通信中断告警，恢复在线时自动闭环对应告警。
 
 ## 告警列表
 
@@ -112,7 +142,7 @@ Content-Type: application/json
 GET /api/analytics
 ```
 
-返回正常、警告、严重管线数量，告警闭环率，工单完成率及各状态数量。
+返回正常、警告、严重管线数量，告警闭环率，工单完成率，以及设备在线率、离线数和待校准数量。
 
 ## 导出告警
 
@@ -128,7 +158,7 @@ GET /api/export/alerts.csv
 GET /api/database
 ```
 
-返回 SQLite 版本、数据库位置、文件大小、保留策略，以及 `telemetry`、`alerts`、`work_orders`、`audit_logs` 四张表的记录数。
+返回 SQLite 版本、数据库位置、文件大小、保留策略，以及 `telemetry`、`alerts`、`work_orders`、`devices`、`audit_logs` 五张表的记录数。
 
 ## 操作审计日志
 
@@ -136,7 +166,7 @@ GET /api/database
 GET /api/audit-logs
 ```
 
-返回最近 50 条关键操作，包括泄漏场景注入、告警生成、告警确认、工单创建和状态更新。
+返回最近 50 条关键操作，包括泄漏场景注入、告警生成、设备校准、设备状态变更、工单创建和状态更新。
 
 ## 导出工单
 
@@ -145,6 +175,14 @@ GET /api/export/work-orders.csv
 ```
 
 返回带 UTF-8 BOM 的工单 CSV 文件，包含负责人、优先级、状态和时限信息。
+
+## 导出设备台账
+
+```http
+GET /api/export/devices.csv
+```
+
+返回带 UTF-8 BOM 的设备 CSV，包含设备归属、实时读数、信号质量、通信协议和校准周期。
 
 ## 注入泄漏演示
 

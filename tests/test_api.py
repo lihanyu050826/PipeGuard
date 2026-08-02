@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.2.0")
+        self.assertEqual(body["version"], "1.3.0")
         self.assertEqual(body["database"], "connected")
 
     def test_overview_contains_three_pipelines(self):
@@ -121,14 +121,51 @@ class ApiTests(unittest.TestCase):
     def test_database_and_audit_endpoints(self):
         _, database = self.request("/api/database")
         self.assertEqual(database["engine"], "SQLite")
-        self.assertEqual(database["schema_version"], "1")
+        self.assertEqual(database["schema_version"], "2")
         table_names = {table["name"] for table in database["tables"]}
         self.assertEqual(
-            table_names, {"telemetry", "alerts", "work_orders", "audit_logs"}
+            table_names,
+            {"telemetry", "alerts", "work_orders", "devices", "audit_logs"},
         )
 
         _, audit_logs = self.request("/api/audit-logs")
         self.assertGreaterEqual(len(audit_logs["items"]), 1)
+
+    def test_device_management_updates_metrics_alerts_and_audit(self):
+        _, devices = self.request("/api/devices")
+        self.assertEqual(len(devices["items"]), 12)
+        device = next(item for item in devices["items"] if item["id"] == "PT-001")
+        self.assertEqual(device["status"], "online")
+        self.assertIsNotNone(device["reading"])
+
+        _, offline = self.request(
+            "/api/devices/PT-001/status",
+            method="POST",
+            payload={"status": "offline"},
+        )
+        self.assertEqual(offline["status"], "offline")
+        self.assertIsNone(offline["reading"])
+        _, overview = self.request("/api/overview")
+        self.assertEqual(overview["metrics"]["online_devices"], 11)
+        _, alerts = self.request("/api/alerts")
+        self.assertTrue(
+            any(item["title"] == "设备 PT-001 通信中断" for item in alerts["items"])
+        )
+
+        _, online = self.request(
+            "/api/devices/PT-001/status",
+            method="POST",
+            payload={"status": "online"},
+        )
+        self.assertEqual(online["status"], "online")
+        _, calibrated = self.request(
+            "/api/devices/PT-001/calibrate", method="POST", payload={}
+        )
+        self.assertFalse(calibrated["calibration_due"])
+        _, audit_logs = self.request("/api/audit-logs")
+        actions = {item["action"] for item in audit_logs["items"]}
+        self.assertIn("device_status_changed", actions)
+        self.assertIn("device_calibrated", actions)
 
     def test_alert_export_is_utf8_csv(self):
         request = urllib.request.Request(
@@ -151,6 +188,16 @@ class ApiTests(unittest.TestCase):
             self.assertTrue(response.headers["Content-Type"].startswith("text/csv"))
             self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
             self.assertIn("工单编号", body.decode("utf-8-sig"))
+
+    def test_device_export_is_utf8_csv(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/export/devices.csv"
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
+            self.assertIn("设备编号", body.decode("utf-8-sig"))
 
 
 if __name__ == "__main__":
