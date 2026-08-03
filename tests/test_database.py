@@ -39,9 +39,9 @@ class DatabasePersistenceTests(unittest.TestCase):
             try:
                 alert_ids = {item["id"] for item in store.alerts()}
                 self.assertIn("ALT-0099", alert_ids)
-                self.assertGreaterEqual(len(alert_ids), 9)
+                self.assertGreaterEqual(len(alert_ids), 14)
                 self.assertEqual(len(store.devices()), 15)
-                self.assertEqual(len(store.inspections()), 9)
+                self.assertEqual(len(store.inspections()), 12)
                 self.assertEqual(store.database_summary()["schema_version"], "3")
             finally:
                 store.close()

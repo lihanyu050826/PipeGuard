@@ -3,7 +3,7 @@
 > 工业互联网概论课程小组项目：利用多源传感、边缘计算与云端可视化，实现油气管道运行状态监测、泄漏风险研判和告警处置闭环。
 
 [![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.5.0-2563eb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.6.0-2563eb)](CHANGELOG.md)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-0b8b80)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 

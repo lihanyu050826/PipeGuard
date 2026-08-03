@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.5.0")
+        self.assertEqual(body["version"], "1.6.0")
         self.assertEqual(body["database"], "connected")
 
     def test_overview_contains_three_pipelines(self):
@@ -139,9 +139,9 @@ class ApiTests(unittest.TestCase):
         _, alerts = self.request("/api/alerts")
         _, work_orders = self.request("/api/work-orders")
         _, inspections = self.request("/api/inspections")
-        self.assertGreaterEqual(len(alerts["items"]), 8)
-        self.assertGreaterEqual(len(work_orders["items"]), 6)
-        self.assertGreaterEqual(len(inspections["items"]), 9)
+        self.assertGreaterEqual(len(alerts["items"]), 13)
+        self.assertGreaterEqual(len(work_orders["items"]), 10)
+        self.assertGreaterEqual(len(inspections["items"]), 12)
         self.assertTrue({"open", "acknowledged", "resolved"}.issubset(
             {item["status"] for item in alerts["items"]}
         ))
@@ -151,6 +151,21 @@ class ApiTests(unittest.TestCase):
         self.assertTrue({"planned", "in_progress", "completed"}.issubset(
             {item["status"] for item in inspections["items"]}
         ))
+        for status in ("open", "acknowledged", "resolved"):
+            self.assertGreaterEqual(
+                len([item for item in alerts["items"] if item["status"] == status]),
+                3,
+            )
+        for status in ("pending", "in_progress", "completed"):
+            self.assertGreaterEqual(
+                len([item for item in work_orders["items"] if item["status"] == status]),
+                3,
+            )
+        for status in ("planned", "in_progress", "completed"):
+            self.assertGreaterEqual(
+                len([item for item in inspections["items"] if item["status"] == status]),
+                3,
+            )
 
     def test_device_management_updates_metrics_alerts_and_audit(self):
         _, devices = self.request("/api/devices")
