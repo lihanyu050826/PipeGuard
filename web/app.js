@@ -4,6 +4,7 @@ const state = {
   alerts: [],
   workOrders: [],
   devices: [],
+  inspections: [],
   analytics: null,
   database: null,
   auditLogs: [],
@@ -13,6 +14,9 @@ const state = {
   deviceStatusFilter: "all",
   deviceTypeFilter: "all",
   deviceSearch: "",
+  inspectionStatusFilter: "all",
+  inspectionPipelineFilter: "all",
+  inspectionSearch: "",
   refreshTimer: null,
 };
 
@@ -22,7 +26,9 @@ const levelText = { normal: "运行正常", warning: "注意观察", critical: "
 const alertStatusText = { open: "待确认", acknowledged: "已确认", resolved: "已恢复" };
 const componentText = { pressure: "压力异常", flow: "流量平衡", gas: "气体浓度", vibration: "振动信号" };
 const workStatusText = { pending: "待处理", in_progress: "处理中", completed: "已完成" };
-const priorityText = { urgent: "紧急", high: "高", medium: "中" };
+const priorityText = { urgent: "紧急", high: "高", medium: "中", low: "低" };
+const inspectionStatusText = { planned: "待执行", in_progress: "执行中", completed: "已完成" };
+const inspectionResultText = { normal: "现场正常", abnormal: "发现异常" };
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -61,9 +67,9 @@ function notify(message) {
 
 async function refreshAll({ quiet = false } = {}) {
   try {
-    const [overview, pipelines, alerts, workOrders, devices, analytics, database, auditLogs] = await Promise.all([
+    const [overview, pipelines, alerts, workOrders, devices, inspections, analytics, database, auditLogs] = await Promise.all([
       api("/api/overview"), api("/api/pipelines"), api("/api/alerts"),
-      api("/api/work-orders"), api("/api/devices"), api("/api/analytics"),
+      api("/api/work-orders"), api("/api/devices"), api("/api/inspections"), api("/api/analytics"),
       api("/api/database"), api("/api/audit-logs"),
     ]);
     state.overview = overview;
@@ -71,6 +77,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.alerts = alerts.items;
     state.workOrders = workOrders.items;
     state.devices = devices.items;
+    state.inspections = inspections.items;
     state.analytics = analytics;
     state.database = database;
     state.auditLogs = auditLogs.items;
@@ -91,6 +98,7 @@ function render() {
   renderAlerts();
   renderWorkOrders();
   renderDevices();
+  renderInspections();
   renderAnalytics();
   renderDatabase();
   loadPipelineDetail(state.selectedPipeline);
@@ -105,6 +113,7 @@ function renderMetrics() {
   $("#metric-alerts").textContent = metrics.open_alerts;
   $("#nav-alert-count").textContent = metrics.open_alerts;
   $("#nav-work-count").textContent = state.workOrders.filter((item) => item.status !== "completed").length;
+  $("#nav-inspection-count").textContent = state.inspections.filter((item) => item.status !== "completed").length;
   $("#last-updated").textContent = `${formatTime(updatedAt)} 更新`;
   const offlineDevices = metrics.device_total - metrics.online_devices;
   $("#health-device-value").textContent = offlineDevices ? `${offlineDevices} 台离线` : "正常";
@@ -362,10 +371,96 @@ async function updateWorkOrder(id, status) {
   }
 }
 
+function renderInspections() {
+  if ($("#inspection-pipeline").options.length === 0) {
+    const options = state.pipelines.map((pipeline) => `<option value="${pipeline.id}">${pipeline.name}</option>`).join("");
+    $("#inspection-pipeline").innerHTML = options;
+    $("#inspection-pipeline-filter").insertAdjacentHTML("beforeend", options);
+  }
+  const total = state.inspections.length;
+  const planned = state.inspections.filter((item) => item.status === "planned").length;
+  const inProgress = state.inspections.filter((item) => item.status === "in_progress").length;
+  const overdue = state.inspections.filter((item) => item.is_overdue).length;
+  $("#inspection-total").textContent = total;
+  $("#inspection-planned").textContent = planned;
+  $("#inspection-progress").textContent = inProgress;
+  $("#inspection-overdue").textContent = overdue;
+
+  const keyword = state.inspectionSearch.trim().toLowerCase();
+  const filtered = state.inspections.filter((task) => {
+    const matchesPipeline = state.inspectionPipelineFilter === "all"
+      || task.pipeline_id === state.inspectionPipelineFilter;
+    const matchesStatus = state.inspectionStatusFilter === "all"
+      || (state.inspectionStatusFilter === "overdue" ? task.is_overdue : task.status === state.inspectionStatusFilter);
+    const searchable = `${task.id} ${task.title} ${task.inspector} ${task.pipeline_name}`.toLowerCase();
+    return matchesPipeline && matchesStatus && (!keyword || searchable.includes(keyword));
+  });
+  $("#inspection-result-count").textContent = `${filtered.length} 项任务`;
+  $("#inspection-grid").innerHTML = filtered.length ? filtered.map((task) => {
+    const visualStatus = task.is_overdue ? "overdue" : task.status;
+    const statusLabel = task.is_overdue ? "已逾期" : inspectionStatusText[task.status];
+    const action = task.status === "planned"
+      ? `<button class="primary" data-inspection-start="${task.id}">开始巡检</button>`
+      : task.status === "in_progress"
+        ? `<button class="primary" data-inspection-complete="${task.id}">提交结论</button>`
+        : `<button disabled>${inspectionResultText[task.result] || "已结项"}</button>`;
+    const progressCopy = task.status === "planned" ? "等待现场人员开始"
+      : task.status === "in_progress" ? `已于 ${formatDateTime(task.started_at)} 开始`
+        : `已于 ${formatDateTime(task.completed_at)} 完成`;
+    return `
+      <article class="panel inspection-card ${task.status} ${task.is_overdue ? "overdue" : ""}">
+        <div class="inspection-head">
+          <div><span class="inspection-code">${task.id}</span><h3>${task.title}</h3><p>${task.pipeline_name} · ${task.pipeline_id}</p></div>
+          <div class="inspection-badges"><span class="inspection-priority ${task.priority}">${priorityText[task.priority]}优先级</span><span class="inspection-status ${visualStatus}">${statusLabel}</span></div>
+        </div>
+        <div class="inspection-meta">
+          <div><span>负责人</span><b>${task.inspector}</b></div>
+          <div><span>计划时间</span><b>${formatDateTime(task.scheduled_at)}</b></div>
+          <div><span>巡检结论</span><b>${inspectionResultText[task.result] || "待提交"}</b></div>
+        </div>
+        <div class="inspection-progress-line"><i></i><span>${progressCopy}</span></div>
+        <p class="inspection-note">${task.notes || "暂无补充说明，按标准巡检清单执行。"}</p>
+        <div class="inspection-checks">${task.checklist.map((item) => `<span>✓ ${item}</span>`).join("")}</div>
+        <div class="inspection-actions">${action}</div>
+      </article>`;
+  }).join("") : `<article class="panel empty-state">没有找到符合筛选条件的巡检任务</article>`;
+
+  $$('[data-inspection-start]').forEach((button) => button.addEventListener("click", () => {
+    updateInspection(button.dataset.inspectionStart, "in_progress");
+  }));
+  $$('[data-inspection-complete]').forEach((button) => button.addEventListener("click", () => {
+    $("#inspection-result-id").value = button.dataset.inspectionComplete;
+    $("#inspection-result-notes").value = "";
+    openModal("inspection-result-modal");
+  }));
+}
+
+function openModal(id) {
+  $("#" + id).classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeModal(id) {
+  $("#" + id).classList.add("hidden");
+  if (!$(".modal-backdrop:not(.hidden)")) document.body.style.overflow = "";
+}
+
+async function updateInspection(id, status, result = "", notes = "") {
+  try {
+    const task = await api(`/api/inspections/${id}/status`, {
+      method: "POST", body: JSON.stringify({ status, result, notes }),
+    });
+    notify(status === "in_progress" ? `${task.id} 已开始巡检` : `${task.id} 已完成，结论已入库`);
+    await refreshAll({ quiet: true });
+  } catch {
+    notify("巡检状态更新失败，请检查任务当前状态");
+  }
+}
+
 function renderAnalytics() {
   if (!state.analytics) return;
   const {
-    risk, alerts, work_orders: workOrders, devices: deviceStats,
+    risk, alerts, work_orders: workOrders, devices: deviceStats, inspections,
     generated_at: generatedAt,
   } = state.analytics;
   const operationScore = Math.max(
@@ -396,8 +491,14 @@ function renderAnalytics() {
   $("#analytics-device-online").textContent = `${deviceStats.online} / ${deviceStats.total}`;
   $("#analytics-device-offline").textContent = deviceStats.offline;
   $("#analytics-device-due").textContent = deviceStats.calibration_due;
+  $("#analytics-inspection-rate").textContent = `完成率 ${inspections.completion_rate}%`;
+  $("#analytics-inspection-total").textContent = inspections.total;
+  $("#analytics-inspection-progress").textContent = inspections.by_status.in_progress;
+  $("#analytics-inspection-overdue").textContent = inspections.overdue;
   $("#operation-advice").textContent = deviceStats.offline > 0
     ? `当前有 ${deviceStats.offline} 台设备离线，建议优先检查设备供电、现场总线和边缘网关连接。`
+    : inspections.overdue > 0
+    ? `当前有 ${inspections.overdue} 项巡检任务逾期，建议优先联系负责人完成现场检查并回填结论。`
     : risk.maximum >= 65
     ? "检测到高风险管线，建议立即创建紧急工单，复核压力、流量与现场气体信号，并按预案隔离相关管段。"
     : workOrders.by_status.pending > 0
@@ -426,6 +527,7 @@ function renderDatabase() {
   $("#db-alert-count").textContent = tableMap.alerts?.rows || 0;
   $("#db-work-count").textContent = tableMap.work_orders?.rows || 0;
   $("#db-device-count").textContent = tableMap.devices?.rows || 0;
+  $("#db-inspection-count").textContent = tableMap.inspection_tasks?.rows || 0;
   $("#db-audit-count").textContent = tableMap.audit_logs?.rows || 0;
   $("#database-table-list").innerHTML = database.tables.map((table) => `
     <div class="database-table-row">
@@ -444,6 +546,11 @@ function renderDatabase() {
     devices_registered: "设备资产入库",
     device_calibrated: "设备远程校准",
     device_status_changed: "设备状态变更",
+    inspection_plans_registered: "巡检计划初始化",
+    inspection_created: "创建巡检计划",
+    inspection_started: "开始现场巡检",
+    inspection_completed: "巡检正常结项",
+    inspection_abnormal: "巡检异常上报",
   };
   $("#audit-log-list").innerHTML = state.auditLogs.length
     ? state.auditLogs.slice(0, 8).map((log) => `
@@ -542,6 +649,7 @@ function navigate(target) {
     alerts: "告警处置中心",
     workorders: "运维工单中心",
     devices: "感知设备管理",
+    inspections: "管线巡检计划",
     analytics: "运行分析报告",
     database: "持久化数据中心",
   };
@@ -551,6 +659,7 @@ function navigate(target) {
     loadPipelineDetail(state.selectedPipeline);
   }
   if (target === "workorders") renderWorkOrders();
+  if (target === "inspections") renderInspections();
   if (target === "analytics") renderAnalytics();
   if (target === "database") renderDatabase();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -590,6 +699,65 @@ $("#device-type-filter").addEventListener("change", (event) => {
 $("#device-search").addEventListener("input", (event) => {
   state.deviceSearch = event.target.value;
   renderDevices();
+});
+$$('[data-inspection-status]').forEach((button) => button.addEventListener("click", () => {
+  state.inspectionStatusFilter = button.dataset.inspectionStatus;
+  $$('[data-inspection-status]').forEach((item) => item.classList.toggle("active", item === button));
+  renderInspections();
+}));
+$("#inspection-pipeline-filter").addEventListener("change", (event) => {
+  state.inspectionPipelineFilter = event.target.value;
+  renderInspections();
+});
+$("#inspection-search").addEventListener("input", (event) => {
+  state.inspectionSearch = event.target.value;
+  renderInspections();
+});
+$("#new-inspection-btn").addEventListener("click", () => {
+  const scheduled = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const local = new Date(scheduled.getTime() - scheduled.getTimezoneOffset() * 60000);
+  $("#inspection-scheduled").value = local.toISOString().slice(0, 16);
+  openModal("inspection-modal");
+});
+$$('[data-close-modal]').forEach((button) => button.addEventListener("click", () => closeModal(button.dataset.closeModal)));
+$$('.modal-backdrop').forEach((modal) => modal.addEventListener("click", (event) => {
+  if (event.target === modal) closeModal(modal.id);
+}));
+$("#inspection-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const checklist = $$('.inspection-checklist input:checked').map((item) => item.value);
+  try {
+    const task = await api("/api/inspections", {
+      method: "POST",
+      body: JSON.stringify({
+        pipeline_id: $("#inspection-pipeline").value,
+        title: $("#inspection-title").value,
+        inspector: $("#inspection-inspector").value,
+        scheduled_at: new Date($("#inspection-scheduled").value).toISOString(),
+        priority: $("#inspection-priority").value,
+        notes: $("#inspection-notes").value,
+        checklist,
+      }),
+    });
+    closeModal("inspection-modal");
+    event.target.reset();
+    notify(`${task.id} 巡检计划已创建`);
+    await refreshAll({ quiet: true });
+  } catch {
+    notify("巡检计划创建失败，请完整填写必填项");
+  }
+});
+$("#inspection-result-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = $('input[name="inspection-result"]:checked').value;
+  const notes = $("#inspection-result-notes").value;
+  if (result === "abnormal" && !notes.trim()) {
+    notify("发现异常时，请填写具体位置和现象");
+    return;
+  }
+  const id = $("#inspection-result-id").value;
+  closeModal("inspection-result-modal");
+  await updateInspection(id, "completed", result, notes);
 });
 window.addEventListener("resize", () => loadPipelineDetail(state.selectedPipeline));
 

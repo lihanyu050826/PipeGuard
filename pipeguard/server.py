@@ -162,6 +162,39 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _inspection_csv(
+        self, rows: List[Dict[str, object]], filename: str
+    ) -> None:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "巡检编号", "巡检任务", "管线编号", "管线名称", "负责人",
+                "优先级", "状态", "计划时间", "开始时间", "完成时间",
+                "巡检结论", "巡检记录",
+            ]
+        )
+        for task in rows:
+            writer.writerow(
+                [
+                    task["id"], task["title"], task["pipeline_id"],
+                    task["pipeline_name"], task["inspector"], task["priority"],
+                    task["status"], task["scheduled_at"],
+                    task.get("started_at", ""), task.get("completed_at", ""),
+                    task.get("result", ""), task.get("notes", ""),
+                ]
+            )
+        body = ("\ufeff" + output.getvalue()).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -177,7 +210,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "service": "pipeguard-api",
-                    "version": "1.3.0",
+                    "version": "1.4.0",
                     "database": "connected",
                 }
             )
@@ -191,6 +224,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json({"items": self.server.store.work_orders()})
         elif path == "/api/devices":
             self._json({"items": self.server.store.devices()})
+        elif path == "/api/inspections":
+            self._json({"items": self.server.store.inspections()})
         elif path == "/api/analytics":
             self._json(self.server.store.analytics())
         elif path == "/api/database":
@@ -206,6 +241,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/export/devices.csv":
             self._device_csv(
                 self.server.store.devices(), "pipeguard-devices.csv"
+            )
+        elif path == "/api/export/inspections.csv":
+            self._inspection_csv(
+                self.server.store.inspections(), "pipeguard-inspections.csv"
             )
         elif pipeline_match:
             pipeline = self.server.store.pipeline(pipeline_match.group(1))
@@ -229,6 +268,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         )
         device_status_match = re.fullmatch(
             r"/api/devices/([A-Za-z0-9-]+)/status", path
+        )
+        inspection_status_match = re.fullmatch(
+            r"/api/inspections/([A-Za-z0-9-]+)/status", path
         )
         if path == "/api/simulate/leak":
             pipe_id = self._body().get("pipeline_id", "PL-001")
@@ -293,6 +335,37 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": error}, HTTPStatus.BAD_REQUEST)
             else:
                 self._json(device)
+        elif path == "/api/inspections":
+            body = self._body()
+            task, error = self.server.store.create_inspection(
+                str(body.get("pipeline_id", "")),
+                str(body.get("title", "")),
+                str(body.get("inspector", "")),
+                str(body.get("scheduled_at", "")),
+                priority=str(body.get("priority", "medium")),
+                notes=str(body.get("notes", "")),
+                checklist=body.get("checklist", []),
+            )
+            if error == "pipeline_not_found":
+                self._json({"error": error}, HTTPStatus.NOT_FOUND)
+            elif error:
+                self._json({"error": error}, HTTPStatus.BAD_REQUEST)
+            else:
+                self._json(task, HTTPStatus.CREATED)
+        elif inspection_status_match:
+            body = self._body()
+            task, error = self.server.store.update_inspection(
+                inspection_status_match.group(1),
+                str(body.get("status", "")),
+                result=str(body.get("result", "")),
+                notes=str(body.get("notes", "")),
+            )
+            if error == "inspection_not_found":
+                self._json({"error": error}, HTTPStatus.NOT_FOUND)
+            elif error:
+                self._json({"error": error}, HTTPStatus.CONFLICT)
+            else:
+                self._json(task)
         else:
             self._json({"error": "endpoint_not_found"}, HTTPStatus.NOT_FOUND)
 

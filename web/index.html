@@ -37,6 +37,10 @@
         <button class="nav-item" data-target="devices">
           <span class="nav-icon">◫</span><span>设备管理</span>
         </button>
+        <button class="nav-item" data-target="inspections">
+          <span class="nav-icon">◇</span><span>巡检计划</span>
+          <span id="nav-inspection-count" class="nav-badge inspection">0</span>
+        </button>
         <button class="nav-item" data-target="analytics">
           <span class="nav-icon">⌁</span><span>分析报告</span>
         </button>
@@ -289,6 +293,37 @@
         <div class="device-grid" id="device-grid"></div>
       </section>
 
+      <section id="inspections-view" class="view">
+        <div class="section-intro">
+          <div><span class="section-kicker">FIELD INSPECTION</span><h2>管线巡检计划</h2><p>安排现场任务、记录巡检结论，并将异常自动转入告警闭环。</p></div>
+          <div class="export-group">
+            <a class="export-button secondary" href="/api/export/inspections.csv" download>导出巡检 CSV <span>↓</span></a>
+            <button id="new-inspection-btn" class="primary-button compact-button">＋ 新建巡检计划</button>
+          </div>
+        </div>
+        <div class="inspection-summary">
+          <article class="panel"><span>计划总数</span><strong id="inspection-total">0</strong><small>累计现场任务</small></article>
+          <article class="panel planned"><span>待执行</span><strong id="inspection-planned">0</strong><small>等待开始巡检</small></article>
+          <article class="panel active"><span>执行中</span><strong id="inspection-progress">0</strong><small>现场人员作业中</small></article>
+          <article class="panel overdue"><span>已逾期</span><strong id="inspection-overdue">0</strong><small>需优先跟进</small></article>
+        </div>
+        <article class="panel inspection-toolbar">
+          <label class="device-search"><span>⌕</span><input id="inspection-search" type="search" placeholder="搜索巡检编号、任务、负责人或管线"></label>
+          <div class="filter-chips inspection-filter">
+            <button class="active" data-inspection-status="all">全部</button>
+            <button data-inspection-status="planned">待执行</button>
+            <button data-inspection-status="in_progress">执行中</button>
+            <button data-inspection-status="completed">已完成</button>
+            <button data-inspection-status="overdue">已逾期</button>
+          </div>
+          <select id="inspection-pipeline-filter" aria-label="巡检管线筛选">
+            <option value="all">全部管线</option>
+          </select>
+          <span id="inspection-result-count" class="device-result-count">0 项任务</span>
+        </article>
+        <div id="inspection-grid" class="inspection-grid"></div>
+      </section>
+
       <section id="analytics-view" class="view">
         <div class="section-intro">
           <div><span class="section-kicker">OPERATION ANALYTICS</span><h2>运行分析报告</h2><p>汇总风险、告警和工单闭环数据，为运维决策提供依据。</p></div>
@@ -315,12 +350,20 @@
               </div>
             </div>
           </article>
-          <article class="panel analytics-panel analytics-wide">
+          <article class="panel analytics-panel">
             <div class="panel-heading"><div><span class="section-kicker">DEVICE RELIABILITY</span><h3>设备连接可靠性</h3></div><span id="analytics-device-rate" class="analytics-tag">—</span></div>
             <div class="device-reliability">
               <div><span class="reliability-icon">◉</span><p>在线设备<strong id="analytics-device-online">0 / 0</strong></p></div>
               <div><span class="reliability-icon warning">△</span><p>离线设备<strong id="analytics-device-offline">0</strong></p></div>
               <div><span class="reliability-icon blue">⌖</span><p>待校准设备<strong id="analytics-device-due">0</strong></p></div>
+            </div>
+          </article>
+          <article class="panel analytics-panel">
+            <div class="panel-heading"><div><span class="section-kicker">INSPECTION DELIVERY</span><h3>巡检执行效率</h3></div><span id="analytics-inspection-rate" class="analytics-tag">—</span></div>
+            <div class="inspection-analytics">
+              <div><span>计划总数</span><strong id="analytics-inspection-total">0</strong></div>
+              <div><span>执行中</span><strong id="analytics-inspection-progress">0</strong></div>
+              <div><span>逾期任务</span><strong id="analytics-inspection-overdue">0</strong></div>
             </div>
           </article>
         </div>
@@ -343,7 +386,7 @@
           <div class="database-copy">
             <span class="database-status"><i></i>数据库连接正常</span>
             <h2><span id="db-engine">SQLite</span> 持久化引擎</h2>
-            <p>设备台账、告警、工单、历史遥测和审计日志均写入数据库，服务重启后仍可恢复。</p>
+            <p>设备台账、巡检计划、告警、工单、历史遥测和审计日志均写入数据库，服务重启后仍可恢复。</p>
           </div>
           <div class="database-meta">
             <div><span>SQLite 版本</span><b id="db-version">—</b></div>
@@ -356,6 +399,7 @@
           <article class="panel"><span>告警记录</span><strong id="db-alert-count">0</strong><small>风险事件持久化</small></article>
           <article class="panel"><span>工单记录</span><strong id="db-work-count">0</strong><small>处置流程可追踪</small></article>
           <article class="panel"><span>设备资产</span><strong id="db-device-count">0</strong><small>校准与状态持久化</small></article>
+          <article class="panel"><span>巡检计划</span><strong id="db-inspection-count">0</strong><small>现场任务可追踪</small></article>
           <article class="panel"><span>审计记录</span><strong id="db-audit-count">0</strong><small>关键操作有留痕</small></article>
         </div>
         <div class="database-grid">
@@ -370,6 +414,32 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="inspection-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="inspection-modal-title">
+    <form id="inspection-form" class="panel modal-card">
+      <div class="modal-head"><div><span class="section-kicker">NEW INSPECTION</span><h2 id="inspection-modal-title">新建巡检计划</h2></div><button type="button" class="modal-close" data-close-modal="inspection-modal">×</button></div>
+      <div class="modal-form-grid">
+        <label><span>关联管线</span><select id="inspection-pipeline" required></select></label>
+        <label><span>任务名称</span><input id="inspection-title" required maxlength="60" placeholder="例如：北区干线日常巡检"></label>
+        <label><span>巡检负责人</span><input id="inspection-inspector" required maxlength="30" placeholder="例如：张工"></label>
+        <label><span>计划时间</span><input id="inspection-scheduled" type="datetime-local" required></label>
+        <label><span>优先级</span><select id="inspection-priority"><option value="medium">中</option><option value="high">高</option><option value="low">低</option></select></label>
+        <label class="modal-wide"><span>巡检说明</span><textarea id="inspection-notes" rows="3" maxlength="300" placeholder="填写重点检查区域或注意事项"></textarea></label>
+      </div>
+      <fieldset class="inspection-checklist"><legend>标准检查清单</legend><label><input type="checkbox" value="检查阀门与法兰是否渗漏" checked> 阀门与法兰渗漏</label><label><input type="checkbox" value="核对压力与流量仪表读数" checked> 压力与流量读数</label><label><input type="checkbox" value="检查管线沿线环境与第三方施工" checked> 沿线环境与第三方施工</label><label><input type="checkbox" value="拍照并填写巡检记录" checked> 现场拍照与记录</label></fieldset>
+      <div class="modal-actions"><button type="button" class="secondary-button" data-close-modal="inspection-modal">取消</button><button type="submit" class="primary-button compact-button">创建计划</button></div>
+    </form>
+  </div>
+
+  <div id="inspection-result-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="inspection-result-title">
+    <form id="inspection-result-form" class="panel modal-card small-modal">
+      <div class="modal-head"><div><span class="section-kicker">COMPLETE INSPECTION</span><h2 id="inspection-result-title">提交巡检结论</h2></div><button type="button" class="modal-close" data-close-modal="inspection-result-modal">×</button></div>
+      <input id="inspection-result-id" type="hidden">
+      <div class="result-options"><label class="active"><input type="radio" name="inspection-result" value="normal" checked> <span>✓</span><b>现场正常</b><small>任务正常闭环</small></label><label><input type="radio" name="inspection-result" value="abnormal"> <span>!</span><b>发现异常</b><small>自动生成告警</small></label></div>
+      <label class="result-notes"><span>巡检记录</span><textarea id="inspection-result-notes" rows="4" maxlength="500" placeholder="填写现场检查结果；发现异常时请描述位置和现象"></textarea></label>
+      <div class="modal-actions"><button type="button" class="secondary-button" data-close-modal="inspection-result-modal">取消</button><button type="submit" class="primary-button compact-button">确认结项</button></div>
+    </form>
   </div>
 
   <div id="toast" class="toast" role="status"><span>✓</span><p></p></div>

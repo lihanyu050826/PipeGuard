@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.3.0")
+        self.assertEqual(body["version"], "1.4.0")
         self.assertEqual(body["database"], "connected")
 
     def test_overview_contains_three_pipelines(self):
@@ -115,17 +115,21 @@ class ApiTests(unittest.TestCase):
         self.assertIn("risk", body)
         self.assertIn("alerts", body)
         self.assertIn("work_orders", body)
+        self.assertIn("inspections", body)
         self.assertGreaterEqual(body["work_orders"]["total"], 2)
         self.assertGreaterEqual(body["alerts"]["closure_rate"], 0)
 
     def test_database_and_audit_endpoints(self):
         _, database = self.request("/api/database")
         self.assertEqual(database["engine"], "SQLite")
-        self.assertEqual(database["schema_version"], "2")
+        self.assertEqual(database["schema_version"], "3")
         table_names = {table["name"] for table in database["tables"]}
         self.assertEqual(
             table_names,
-            {"telemetry", "alerts", "work_orders", "devices", "audit_logs"},
+            {
+                "telemetry", "alerts", "work_orders", "devices",
+                "inspection_tasks", "audit_logs",
+            },
         )
 
         _, audit_logs = self.request("/api/audit-logs")
@@ -198,6 +202,61 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
             self.assertIn("设备编号", body.decode("utf-8-sig"))
+
+    def test_inspection_workflow_can_create_start_and_report_abnormal(self):
+        status, task = self.request(
+            "/api/inspections",
+            method="POST",
+            payload={
+                "pipeline_id": "PL-001",
+                "title": "API 巡检闭环测试",
+                "inspector": "测试巡检员",
+                "scheduled_at": "2026-08-03T10:00:00+00:00",
+                "priority": "high",
+                "notes": "检查北区阀室",
+                "checklist": ["检查阀门", "核对压力"],
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(task["status"], "planned")
+        self.assertEqual(task["pipeline_name"], "北区输油干线")
+
+        _, started = self.request(
+            "/api/inspections/{}/status".format(task["id"]),
+            method="POST",
+            payload={"status": "in_progress"},
+        )
+        self.assertEqual(started["status"], "in_progress")
+        self.assertIsNotNone(started["started_at"])
+
+        _, completed = self.request(
+            "/api/inspections/{}/status".format(task["id"]),
+            method="POST",
+            payload={
+                "status": "completed",
+                "result": "abnormal",
+                "notes": "河西阀室法兰处发现轻微油渍",
+            },
+        )
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["result"], "abnormal")
+        _, alerts = self.request("/api/alerts")
+        self.assertTrue(any(
+            item["title"] == "北区输油干线巡检发现异常"
+            for item in alerts["items"]
+        ))
+        _, audits = self.request("/api/audit-logs")
+        self.assertIn("inspection_abnormal", {item["action"] for item in audits["items"]})
+
+    def test_inspection_export_is_utf8_csv(self):
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}/api/export/inspections.csv".format(self.port)
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
+            self.assertIn("巡检编号", body.decode("utf-8-sig"))
 
 
 if __name__ == "__main__":

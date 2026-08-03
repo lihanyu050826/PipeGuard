@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 def utc_now() -> str:
@@ -134,6 +134,29 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_devices_pipeline_status
                     ON devices(pipeline_id, status);
+
+                CREATE TABLE IF NOT EXISTS inspection_tasks (
+                    id TEXT PRIMARY KEY,
+                    pipeline_id TEXT NOT NULL,
+                    pipeline_name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    inspector TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    scheduled_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    result TEXT,
+                    notes TEXT NOT NULL,
+                    checklist TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_inspections_pipeline_status
+                    ON inspection_tasks(pipeline_id, status);
+                CREATE INDEX IF NOT EXISTS idx_inspections_scheduled_at
+                    ON inspection_tasks(scheduled_at);
                 """
             )
             self._connection.execute(
@@ -146,6 +169,7 @@ class Database:
         initial_alerts: List[Dict[str, Any]],
         initial_work_orders: List[Dict[str, Any]],
         initial_devices: List[Dict[str, Any]],
+        initial_inspections: List[Dict[str, Any]],
     ) -> None:
         """Seed new tables without overwriting existing business data."""
 
@@ -175,6 +199,18 @@ class Database:
                     "device",
                     "all",
                     "12 台工业传感设备已完成资产入库。",
+                )
+            inspection_count = self._connection.execute(
+                "SELECT COUNT(*) FROM inspection_tasks"
+            ).fetchone()[0]
+            if not inspection_count:
+                for inspection in initial_inspections:
+                    self._insert_inspection(inspection)
+                self._insert_audit(
+                    "inspection_plans_registered",
+                    "inspection",
+                    "all",
+                    "示例巡检计划已写入数据库。",
                 )
 
     def _insert_alert(self, alert: Dict[str, Any]) -> None:
@@ -229,6 +265,27 @@ class Database:
             ),
         )
 
+    def _insert_inspection(self, inspection: Dict[str, Any]) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO inspection_tasks(
+                id, pipeline_id, pipeline_name, title, inspector, priority,
+                status, scheduled_at, started_at, completed_at, result,
+                notes, checklist, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                inspection["id"], inspection["pipeline_id"],
+                inspection["pipeline_name"], inspection["title"],
+                inspection["inspector"], inspection["priority"],
+                inspection["status"], inspection["scheduled_at"],
+                inspection.get("started_at"), inspection.get("completed_at"),
+                inspection.get("result"), inspection.get("notes", ""),
+                json.dumps(inspection.get("checklist", []), ensure_ascii=False),
+                inspection["created_at"], inspection["updated_at"],
+            ),
+        )
+
     def load_alerts(self) -> List[Dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(
@@ -249,6 +306,18 @@ class Database:
                 "SELECT * FROM devices ORDER BY pipeline_id, type_code"
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def load_inspections(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM inspection_tasks ORDER BY scheduled_at, id"
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["checklist"] = json.loads(item["checklist"] or "[]")
+            result.append(item)
+        return result
 
     def save_alert(self, alert: Dict[str, Any]) -> None:
         with self._lock, self._connection:
@@ -308,6 +377,30 @@ class Database:
             )
             if cursor.rowcount == 0:
                 self._insert_device(device)
+
+    def save_inspection(self, inspection: Dict[str, Any]) -> None:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE inspection_tasks SET pipeline_id=?, pipeline_name=?,
+                    title=?, inspector=?, priority=?, status=?, scheduled_at=?,
+                    started_at=?, completed_at=?, result=?, notes=?, checklist=?,
+                    created_at=?, updated_at=? WHERE id=?
+                """,
+                (
+                    inspection["pipeline_id"], inspection["pipeline_name"],
+                    inspection["title"], inspection["inspector"],
+                    inspection["priority"], inspection["status"],
+                    inspection["scheduled_at"], inspection.get("started_at"),
+                    inspection.get("completed_at"), inspection.get("result"),
+                    inspection.get("notes", ""),
+                    json.dumps(inspection.get("checklist", []), ensure_ascii=False),
+                    inspection["created_at"], inspection["updated_at"],
+                    inspection["id"],
+                ),
+            )
+            if cursor.rowcount == 0:
+                self._insert_inspection(inspection)
 
     def save_telemetry(self, pipeline_id: str, sample: Dict[str, Any]) -> None:
         risk = sample["risk"]
@@ -409,12 +502,14 @@ class Database:
             "alerts": "风险告警事件",
             "work_orders": "运维处置工单",
             "devices": "工业设备资产",
+            "inspection_tasks": "管线巡检计划",
             "audit_logs": "系统操作审计",
         }
         tables = []
         with self._lock:
             for name in (
-                "telemetry", "alerts", "work_orders", "devices", "audit_logs"
+                "telemetry", "alerts", "work_orders", "devices",
+                "inspection_tasks", "audit_logs"
             ):
                 count = self._connection.execute(
                     "SELECT COUNT(*) FROM " + name

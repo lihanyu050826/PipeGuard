@@ -39,7 +39,8 @@ class DatabasePersistenceTests(unittest.TestCase):
             try:
                 self.assertEqual([item["id"] for item in store.alerts()], ["ALT-0099"])
                 self.assertEqual(len(store.devices()), 12)
-                self.assertEqual(store.database_summary()["schema_version"], "2")
+                self.assertEqual(len(store.inspections()), 3)
+                self.assertEqual(store.database_summary()["schema_version"], "3")
             finally:
                 store.close()
 
@@ -60,6 +61,17 @@ class DatabasePersistenceTests(unittest.TestCase):
             device, error = store.update_device_status("GT-002", "offline")
             self.assertIsNone(error)
             self.assertEqual(device["status"], "offline")
+            inspection, error = store.create_inspection(
+                "PL-002", "持久化巡检测试", "数据库测试员",
+                "2026-08-05T08:00:00+00:00", priority="high",
+                checklist=["检查阀门", "核对仪表"],
+            )
+            self.assertIsNone(error)
+            started, error = store.update_inspection(
+                inspection["id"], "in_progress"
+            )
+            self.assertIsNone(error)
+            self.assertEqual(started["status"], "in_progress")
             store.close()
 
             reopened = MonitoringStore(seed=17, database_path=database_path)
@@ -77,6 +89,12 @@ class DatabasePersistenceTests(unittest.TestCase):
                     item for item in reopened.devices() if item["id"] == "GT-002"
                 )
                 self.assertEqual(persisted_device["status"], "offline")
+                persisted_inspection = next(
+                    item for item in reopened.inspections()
+                    if item["id"] == inspection["id"]
+                )
+                self.assertEqual(persisted_inspection["status"], "in_progress")
+                self.assertEqual(persisted_inspection["checklist"], ["检查阀门", "核对仪表"])
                 self.assertGreaterEqual(
                     reopened.database_summary()["tables"][0]["rows"], 96
                 )
@@ -84,6 +102,8 @@ class DatabasePersistenceTests(unittest.TestCase):
                 self.assertIn("alert_created", actions)
                 self.assertIn("work_order_created", actions)
                 self.assertIn("device_status_changed", actions)
+                self.assertIn("inspection_created", actions)
+                self.assertIn("inspection_started", actions)
             finally:
                 reopened.close()
 

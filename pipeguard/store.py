@@ -197,14 +197,77 @@ class MonitoringStore:
                         ).isoformat(timespec="seconds"),
                     }
                 )
+        now = datetime.now(timezone.utc)
+        default_checklist = [
+            "检查阀门与法兰是否渗漏",
+            "核对压力与流量仪表读数",
+            "检查管线沿线环境与第三方施工",
+            "拍照并填写巡检记录",
+        ]
+        initial_inspections = [  # type: List[Dict[str, Any]]
+            {
+                "id": "INS-0001",
+                "pipeline_id": "PL-001",
+                "pipeline_name": "北区输油干线",
+                "title": "北区干线日常巡检",
+                "inspector": "张工",
+                "priority": "high",
+                "status": "planned",
+                "scheduled_at": (now + timedelta(hours=2)).isoformat(timespec="seconds"),
+                "started_at": None,
+                "completed_at": None,
+                "result": None,
+                "notes": "重点检查河西阀室附近管段。",
+                "checklist": list(default_checklist),
+                "created_at": now.isoformat(timespec="seconds"),
+                "updated_at": now.isoformat(timespec="seconds"),
+            },
+            {
+                "id": "INS-0002",
+                "pipeline_id": "PL-002",
+                "pipeline_name": "东区天然气支线",
+                "title": "东区支线仪表专项巡检",
+                "inspector": "王工",
+                "priority": "medium",
+                "status": "in_progress",
+                "scheduled_at": (now - timedelta(hours=1)).isoformat(timespec="seconds"),
+                "started_at": (now - timedelta(minutes=45)).isoformat(timespec="seconds"),
+                "completed_at": None,
+                "result": None,
+                "notes": "复核气体探测器与振动传感器。",
+                "checklist": list(default_checklist),
+                "created_at": (now - timedelta(hours=3)).isoformat(timespec="seconds"),
+                "updated_at": (now - timedelta(minutes=45)).isoformat(timespec="seconds"),
+            },
+            {
+                "id": "INS-0003",
+                "pipeline_id": "PL-003",
+                "pipeline_name": "南区成品油管线",
+                "title": "南区储备库交接巡检",
+                "inspector": "李工",
+                "priority": "medium",
+                "status": "completed",
+                "scheduled_at": (now - timedelta(days=1)).isoformat(timespec="seconds"),
+                "started_at": (now - timedelta(days=1, minutes=-10)).isoformat(timespec="seconds"),
+                "completed_at": (now - timedelta(days=1, minutes=-55)).isoformat(timespec="seconds"),
+                "result": "normal",
+                "notes": "现场管线、阀室及仪表状态正常。",
+                "checklist": list(default_checklist),
+                "created_at": (now - timedelta(days=2)).isoformat(timespec="seconds"),
+                "updated_at": (now - timedelta(days=1, minutes=-55)).isoformat(timespec="seconds"),
+            },
+        ]
         self._database.initialize(
-            initial_alerts, initial_work_orders, initial_devices
+            initial_alerts, initial_work_orders, initial_devices,
+            initial_inspections,
         )
         self._alerts = self._database.load_alerts()
         self._work_orders = self._database.load_work_orders()
         self._devices = self._database.load_devices()
+        self._inspections = self._database.load_inspections()
         self._alert_seq = self._maximum_sequence(self._alerts)
         self._work_order_seq = self._maximum_sequence(self._work_orders)
+        self._inspection_seq = self._maximum_sequence(self._inspections)
 
         history_available = True
         for pipeline in PIPELINES:
@@ -381,6 +444,122 @@ class MonitoringStore:
     def work_orders(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(work_order) for work_order in self._work_orders]
+
+    def inspections(self) -> List[Dict[str, Any]]:
+        """Return inspection plans with a calculated overdue flag."""
+
+        with self._lock:
+            now = utc_now()
+            result = []
+            for inspection in self._inspections:
+                item = dict(inspection)
+                item["checklist"] = list(inspection.get("checklist", []))
+                item["is_overdue"] = (
+                    inspection["status"] != "completed"
+                    and inspection["scheduled_at"] < now
+                )
+                result.append(item)
+            return sorted(result, key=lambda item: (item["status"] == "completed", item["scheduled_at"]))
+
+    def create_inspection(
+        self,
+        pipeline_id: str,
+        title: str,
+        inspector: str,
+        scheduled_at: str,
+        priority: str = "medium",
+        notes: str = "",
+        checklist: Optional[List[str]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        if priority not in ("low", "medium", "high"):
+            return None, "invalid_priority"
+        pipeline = next((item for item in PIPELINES if item["id"] == pipeline_id), None)
+        if not pipeline:
+            return None, "pipeline_not_found"
+        if not title.strip() or not inspector.strip() or not scheduled_at.strip():
+            return None, "required_fields"
+        with self._lock:
+            self._inspection_seq += 1
+            now = utc_now()
+            task = {
+                "id": "INS-{:04d}".format(self._inspection_seq),
+                "pipeline_id": pipeline["id"],
+                "pipeline_name": pipeline["name"],
+                "title": title.strip(),
+                "inspector": inspector.strip(),
+                "priority": priority,
+                "status": "planned",
+                "scheduled_at": scheduled_at.strip(),
+                "started_at": None,
+                "completed_at": None,
+                "result": None,
+                "notes": notes.strip(),
+                "checklist": [
+                    str(item).strip() for item in (checklist or []) if str(item).strip()
+                ],
+                "created_at": now,
+                "updated_at": now,
+            }
+            self._inspections.append(task)
+            self._database.save_inspection(task)
+            self._database.add_audit(
+                "inspection_created", "inspection", task["id"],
+                "为{}创建巡检计划，负责人为{}。".format(
+                    pipeline["name"], task["inspector"]
+                ),
+            )
+            return dict(task), None
+
+    def update_inspection(
+        self, inspection_id: str, status: str, result: str = "", notes: str = ""
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        allowed = {"planned": {"in_progress"}, "in_progress": {"completed"}, "completed": set()}
+        if status not in allowed:
+            return None, "invalid_status"
+        with self._lock:
+            task = next((item for item in self._inspections if item["id"] == inspection_id), None)
+            if not task:
+                return None, "inspection_not_found"
+            current = task["status"]
+            if status == current:
+                return dict(task), None
+            if status not in allowed[current]:
+                return None, "invalid_transition"
+            if status == "completed" and result not in ("normal", "abnormal"):
+                return None, "invalid_result"
+            now = utc_now()
+            task["status"] = status
+            task["updated_at"] = now
+            action = "inspection_started"
+            detail = "{}巡检已开始，负责人为{}。".format(task["pipeline_name"], task["inspector"])
+            if status == "in_progress":
+                task["started_at"] = now
+            else:
+                task["result"] = result
+                task["notes"] = notes.strip() or task["notes"]
+                task["completed_at"] = now
+                action = "inspection_completed"
+                detail = "巡检结论：{}。".format("正常" if result == "normal" else "发现异常")
+                if result == "abnormal":
+                    self._alert_seq += 1
+                    alert = {
+                        "id": "ALT-{:04d}".format(self._alert_seq),
+                        "pipeline_id": task["pipeline_id"],
+                        "pipeline_name": task["pipeline_name"],
+                        "level": "warning",
+                        "title": "{}巡检发现异常".format(task["pipeline_name"]),
+                        "description": task["notes"] or "现场巡检发现异常，请安排进一步排查。",
+                        "status": "open",
+                        "created_at": now,
+                        "acknowledged_at": None,
+                    }
+                    self._alerts.insert(0, alert)
+                    self._database.save_alert(alert)
+                    action = "inspection_abnormal"
+                    detail += " 系统已自动生成告警{}。".format(alert["id"])
+            self._database.save_inspection(task)
+            self._database.add_audit(action, "inspection", task["id"], detail)
+            return dict(task), None
 
     def devices(self) -> List[Dict[str, Any]]:
         """Return persistent device assets enriched with live readings."""
@@ -613,6 +792,14 @@ class MonitoringStore:
             calibration_due = sum(
                 device["maintenance_due"] <= utc_now() for device in self._devices
             )
+            inspection_status = {
+                status: sum(item["status"] == status for item in self._inspections)
+                for status in ("planned", "in_progress", "completed")
+            }
+            overdue = sum(
+                item["status"] != "completed" and item["scheduled_at"] < utc_now()
+                for item in self._inspections
+            )
             return {
                 "generated_at": utc_now(),
                 "risk": {
@@ -645,6 +832,15 @@ class MonitoringStore:
                         online_devices / max(1, len(self._devices)) * 100, 1
                     ),
                     "calibration_due": calibration_due,
+                },
+                "inspections": {
+                    "total": len(self._inspections),
+                    "by_status": inspection_status,
+                    "overdue": overdue,
+                    "completion_rate": round(
+                        inspection_status["completed"]
+                        / max(1, len(self._inspections)) * 100, 1
+                    ),
                 },
             }
 

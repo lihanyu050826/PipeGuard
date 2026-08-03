@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.3.0","database":"connected"}
+{"status":"ok","service":"pipeguard-api","version":"1.4.0","database":"connected"}
 ```
 
 ## 管网总览
@@ -81,6 +81,34 @@ Content-Type: application/json
 
 状态可为 `online` 或 `offline`。设备离线时系统自动生成通信中断告警，恢复在线时自动闭环对应告警。
 
+## 巡检计划
+
+查询巡检任务：
+
+```http
+GET /api/inspections
+```
+
+新建计划：
+
+```http
+POST /api/inspections
+Content-Type: application/json
+
+{"pipeline_id":"PL-001","title":"北区干线日常巡检","inspector":"张工","scheduled_at":"2026-08-03T10:00:00+00:00","priority":"high","notes":"重点检查河西阀室","checklist":["检查阀门","核对仪表"]}
+```
+
+推进状态或提交结论：
+
+```http
+POST /api/inspections/INS-0004/status
+Content-Type: application/json
+
+{"status":"completed","result":"abnormal","notes":"法兰处发现轻微油渍"}
+```
+
+状态只能按 `planned` → `in_progress` → `completed` 流转。结论可为 `normal` 或 `abnormal`；异常结项会自动生成一条待确认告警。
+
 ## 告警列表
 
 ```http
@@ -142,7 +170,7 @@ Content-Type: application/json
 GET /api/analytics
 ```
 
-返回正常、警告、严重管线数量，告警闭环率，工单完成率，以及设备在线率、离线数和待校准数量。
+返回正常、警告、严重管线数量，告警闭环率，工单完成率，巡检完成率与逾期数，以及设备在线率、离线数和待校准数量。
 
 ## 导出告警
 
@@ -158,7 +186,7 @@ GET /api/export/alerts.csv
 GET /api/database
 ```
 
-返回 SQLite 版本、数据库位置、文件大小、保留策略，以及 `telemetry`、`alerts`、`work_orders`、`devices`、`audit_logs` 五张表的记录数。
+返回 SQLite 版本、数据库位置、文件大小、保留策略，以及 `telemetry`、`alerts`、`work_orders`、`devices`、`inspection_tasks`、`audit_logs` 六张表的记录数。
 
 ## 操作审计日志
 
@@ -183,6 +211,14 @@ GET /api/export/devices.csv
 ```
 
 返回带 UTF-8 BOM 的设备 CSV，包含设备归属、实时读数、信号质量、通信协议和校准周期。
+
+## 导出巡检记录
+
+```http
+GET /api/export/inspections.csv
+```
+
+返回带 UTF-8 BOM 的巡检 CSV，包含负责人、计划时间、状态、结论和现场记录。
 
 ## 注入泄漏演示
 
