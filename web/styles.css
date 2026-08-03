@@ -331,6 +331,72 @@ main { grid-column: 2; padding: 30px 34px 46px; width: min(100%, 1650px); }
 .toast { position: fixed; z-index: 300; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 10px; max-width: 340px; padding: 12px 15px; color: white; background: #173b3b; box-shadow: 0 12px 30px rgba(0,0,0,.16); border-radius: 10px; transform: translateY(120px); opacity: 0; transition: .3s ease; }.toast.show { transform: translateY(0); opacity: 1; }.toast span { width: 22px; height: 22px; display: grid; place-items: center; color: #0d635d; background: #8be0cf; border-radius: 50%; }.toast p { margin: 0; font-size: 9px; }
 .skeleton-block { background: linear-gradient(90deg, #f1f5f5 25%, #f7f9f9 50%, #f1f5f5 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 10px; } @keyframes shimmer { to { background-position: -200% 0; } }
 
+/* Readability pass: keep operational data legible on classroom projectors. */
+.nav-item { font-size: 14px; }
+.edge-head, .edge-card strong, .profile b { font-size: 13px; }
+.edge-meta, .profile small { font-size: 11px; }
+.top-actions, .last-updated, .connection { font-size: 12px; }
+.eyebrow, .section-kicker { font-size: 11px; }
+.panel-heading h3 { font-size: 16px; }
+.section-intro h2 { font-size: 25px; }
+.section-intro p { font-size: 13px; }
+main .view p,
+main .view small,
+main .view label,
+main .view li,
+main .view em { font-size: 12px; }
+main .view button,
+main .view input,
+main .view select,
+main .view textarea,
+main .view th,
+main .view td { font-size: 12px; }
+main .view span { font-size: 12px; }
+main .view .metric-icon,
+main .view .summary-icon,
+main .view .reliability-icon,
+main .view .table-symbol,
+main .view .device-symbol,
+main .view .pipe-symbol,
+main .view .ai-chip { font-size: 16px; }
+.metric-card > div > span,
+.sensor-card > span,
+.pipeline-value span,
+.device-data span,
+.inspection-meta span,
+.work-meta span,
+.analytics-facts span,
+.database-summary span { font-size: 12px; }
+.metric-card small,
+.sensor-card small,
+.work-summary small,
+.device-summary small,
+.inspection-summary small,
+.database-summary small { font-size: 11px; }
+.status-tag,
+.status-chip,
+.online-tag,
+.inspection-status,
+.inspection-priority,
+.work-priority,
+.analytics-tag { font-size: 11px; }
+.device-card h3,
+.inspection-card h3,
+.work-order-card h3 { font-size: 15px; }
+.device-reading span,
+.device-reading em,
+.device-reading small,
+.device-result-count,
+.inspection-code,
+.work-order-code,
+.calibration-row { font-size: 11px; }
+.audit-log-row b { font-size: 13px; }
+.audit-log-row p { font-size: 12px; }
+.audit-log-row small { font-size: 11px; }
+.database-table-row b { font-size: 12px; }
+.database-table-row small { font-size: 11px; }
+.toast p { font-size: 12px; }
+
 @media (max-width: 1150px) {
   .hero-grid { grid-template-columns: 1fr; }.health-card { display: none; }
   .monitor-layout { grid-template-columns: 190px 1fr; }.risk-panel { grid-column: 1 / -1; }.risk-panel { display: grid; grid-template-columns: 180px 1fr 1fr; gap: 16px; }.risk-panel .panel-heading { grid-column: 1 / -1; }

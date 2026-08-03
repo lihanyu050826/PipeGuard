@@ -171,46 +171,64 @@ class Database:
         initial_devices: List[Dict[str, Any]],
         initial_inspections: List[Dict[str, Any]],
     ) -> None:
-        """Seed new tables without overwriting existing business data."""
+        """Add missing demo records without overwriting existing business data."""
 
         with self._lock, self._connection:
-            alert_count = self._connection.execute(
-                "SELECT COUNT(*) FROM alerts"
-            ).fetchone()[0]
-            if not alert_count:
-                for alert in initial_alerts:
+            added_alerts = 0
+            for alert in initial_alerts:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM alerts WHERE id=?", (alert["id"],)
+                ).fetchone()
+                if not exists:
                     self._insert_alert(alert)
-                for order in initial_work_orders:
+                    added_alerts += 1
+            added_orders = 0
+            for order in initial_work_orders:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM work_orders WHERE id=?", (order["id"],)
+                ).fetchone()
+                if not exists:
                     self._insert_work_order(order)
+                    added_orders += 1
+            if added_alerts or added_orders:
                 self._insert_audit(
                     "database_initialized",
                     "system",
                     "PipeGuard",
-                    "SQLite 数据库初始化完成，已写入演示告警与工单。",
+                    "已补充 {} 条演示告警和 {} 条演示工单。".format(
+                        added_alerts, added_orders
+                    ),
                 )
-            device_count = self._connection.execute(
-                "SELECT COUNT(*) FROM devices"
-            ).fetchone()[0]
-            if not device_count:
-                for device in initial_devices:
+            added_devices = 0
+            for device in initial_devices:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM devices WHERE id=?", (device["id"],)
+                ).fetchone()
+                if not exists:
                     self._insert_device(device)
+                    added_devices += 1
+            if added_devices:
                 self._insert_audit(
                     "devices_registered",
                     "device",
                     "all",
-                    "12 台工业传感设备已完成资产入库。",
+                    "已补充 {} 台工业传感设备资产。".format(added_devices),
                 )
-            inspection_count = self._connection.execute(
-                "SELECT COUNT(*) FROM inspection_tasks"
-            ).fetchone()[0]
-            if not inspection_count:
-                for inspection in initial_inspections:
+            added_inspections = 0
+            for inspection in initial_inspections:
+                exists = self._connection.execute(
+                    "SELECT 1 FROM inspection_tasks WHERE id=?",
+                    (inspection["id"],),
+                ).fetchone()
+                if not exists:
                     self._insert_inspection(inspection)
+                    added_inspections += 1
+            if added_inspections:
                 self._insert_audit(
                     "inspection_plans_registered",
                     "inspection",
                     "all",
-                    "示例巡检计划已写入数据库。",
+                    "已补充 {} 条示例巡检计划。".format(added_inspections),
                 )
 
     def _insert_alert(self, alert: Dict[str, Any]) -> None:

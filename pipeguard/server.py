@@ -210,7 +210,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "service": "pipeguard-api",
-                    "version": "1.4.0",
+                    "version": "1.5.0",
                     "database": "connected",
                 }
             )

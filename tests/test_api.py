@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["version"], "1.4.0")
+        self.assertEqual(body["version"], "1.5.0")
         self.assertEqual(body["database"], "connected")
 
     def test_overview_contains_three_pipelines(self):
@@ -135,9 +135,26 @@ class ApiTests(unittest.TestCase):
         _, audit_logs = self.request("/api/audit-logs")
         self.assertGreaterEqual(len(audit_logs["items"]), 1)
 
+    def test_demo_dataset_has_multiple_actionable_records(self):
+        _, alerts = self.request("/api/alerts")
+        _, work_orders = self.request("/api/work-orders")
+        _, inspections = self.request("/api/inspections")
+        self.assertGreaterEqual(len(alerts["items"]), 8)
+        self.assertGreaterEqual(len(work_orders["items"]), 6)
+        self.assertGreaterEqual(len(inspections["items"]), 9)
+        self.assertTrue({"open", "acknowledged", "resolved"}.issubset(
+            {item["status"] for item in alerts["items"]}
+        ))
+        self.assertTrue({"pending", "in_progress", "completed"}.issubset(
+            {item["status"] for item in work_orders["items"]}
+        ))
+        self.assertTrue({"planned", "in_progress", "completed"}.issubset(
+            {item["status"] for item in inspections["items"]}
+        ))
+
     def test_device_management_updates_metrics_alerts_and_audit(self):
         _, devices = self.request("/api/devices")
-        self.assertEqual(len(devices["items"]), 12)
+        self.assertEqual(len(devices["items"]), 15)
         device = next(item for item in devices["items"] if item["id"] == "PT-001")
         self.assertEqual(device["status"], "online")
         self.assertIsNotNone(device["reading"])
@@ -150,7 +167,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(offline["status"], "offline")
         self.assertIsNone(offline["reading"])
         _, overview = self.request("/api/overview")
-        self.assertEqual(overview["metrics"]["online_devices"], 11)
+        self.assertEqual(overview["metrics"]["online_devices"], 14)
         _, alerts = self.request("/api/alerts")
         self.assertTrue(
             any(item["title"] == "设备 PT-001 通信中断" for item in alerts["items"])

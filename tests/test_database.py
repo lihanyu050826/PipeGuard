@@ -37,9 +37,11 @@ class DatabasePersistenceTests(unittest.TestCase):
                 )
             store = MonitoringStore(seed=5, database_path=database_path)
             try:
-                self.assertEqual([item["id"] for item in store.alerts()], ["ALT-0099"])
-                self.assertEqual(len(store.devices()), 12)
-                self.assertEqual(len(store.inspections()), 3)
+                alert_ids = {item["id"] for item in store.alerts()}
+                self.assertIn("ALT-0099", alert_ids)
+                self.assertGreaterEqual(len(alert_ids), 9)
+                self.assertEqual(len(store.devices()), 15)
+                self.assertEqual(len(store.inspections()), 9)
                 self.assertEqual(store.database_summary()["schema_version"], "3")
             finally:
                 store.close()

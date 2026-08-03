@@ -3,7 +3,7 @@
 > 工业互联网概论课程小组项目：利用多源传感、边缘计算与云端可视化，实现油气管道运行状态监测、泄漏风险研判和告警处置闭环。
 
 [![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.4.0-2563eb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.0-2563eb)](CHANGELOG.md)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-0b8b80)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
@@ -20,11 +20,11 @@
 
 ## 功能亮点
 
-- 三条在役管线与 12 台感知设备的实时数据模拟
+- 三条在役管线与 15 台感知设备的实时数据模拟
 - 压力、流量、气体、振动四信号加权融合
 - 0–100 风险评分、三级风险分级及可解释研判依据
 - 监控总览、管线趋势、设备资产、巡检计划、告警中心、运维工单、分析报告和数据中心八个功能页面
-- 12 台设备台账入库，支持实时读数、搜索筛选、远程校准和状态管理
+- 15 台设备台账入库，支持实时读数、搜索筛选、远程校准和状态管理
 - 设备离线自动生成告警，恢复在线后自动闭环对应事件
 - 巡检计划支持新建、筛选、开始、正常/异常结项和逾期统计
 - 巡检发现异常时自动生成告警，实现现场检查与事件处置联动
@@ -160,7 +160,7 @@ PipeGuard/
 python -m unittest discover -s tests -v
 ```
 
-当前共 25 项自动化测试，覆盖正常、警告、严重风险识别，管线查询、泄漏注入、告警确认、工单与巡检状态机、巡检异常告警联动、设备校准、离线/恢复联动、v1 数据库无损升级、SQLite 重启持久化、审计日志、运营统计、四类 CSV 导出和 Python 3.6 兼容性。
+当前共 26 项自动化测试，覆盖正常、警告、严重风险识别，演示数据完整性、管线查询、泄漏注入、告警确认、工单与巡检状态机、巡检异常告警联动、设备校准、离线/恢复联动、v1 数据库无损升级、SQLite 重启持久化、审计日志、运营统计、四类 CSV 导出和 Python 3.6 兼容性。
 
 ## 数据库设计
 

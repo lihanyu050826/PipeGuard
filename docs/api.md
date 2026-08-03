@@ -9,7 +9,7 @@ GET /api/health
 ```
 
 ```json
-{"status":"ok","service":"pipeguard-api","version":"1.4.0","database":"connected"}
+{"status":"ok","service":"pipeguard-api","version":"1.5.0","database":"connected"}
 ```
 
 ## 管网总览
@@ -53,7 +53,7 @@ GET /api/pipelines/PL-001
 
 ## 设备资产管理
 
-查询 12 台传感设备台账与实时读数：
+查询 15 台传感设备台账与实时读数：
 
 ```http
 GET /api/devices
